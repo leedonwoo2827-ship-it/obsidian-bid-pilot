@@ -34,10 +34,10 @@ Claude Code에서 생성한 분석 결과를 Obsidian에서 시각화하고, Gem
 ---
 type: context
 category: company
-summary: "유비온 2025년 IR보고서, AI 기반 에듀테크 사업 현황"
-tags: [에듀테크, AI, B2B, 글로벌]
-entities: [유비온, NICE평가정보, 미래에셋증권]
-relevance: "입찰 시 회사 역량 증빙 및 사업실적 참조 자료로 활용"
+summary: "데크만팩토리 2025년 IR보고서, AI 솔루션 사업 현황"
+tags: [AI, SaaS, B2B, 공공조달]
+entities: [데크만팩토리, 한국신용평가, 삼성증권]
+relevance: "입찰 시 회사 역량 증빙 및 수행실적 참조 자료로 활용"
 ---
 ```
 
