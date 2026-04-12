@@ -1,0 +1,20 @@
+{
+  "name": "obsidian-bid-pilot",
+  "version": "1.0.0",
+  "description": "Bid Intelligence Obsidian Plugin",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [],
+  "author": "scottnaddle",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.20.0",
+    "obsidian": "latest",
+    "typescript": "5.3.3"
+  }
+}

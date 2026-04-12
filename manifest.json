@@ -1,0 +1,10 @@
+{
+  "id": "bid-intelligence",
+  "name": "Bid Intelligence",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "수주 정보 분석 대시보드 — 컨텍스트 관리, 브리핑 뷰어, 분석 리포트 시각화",
+  "author": "scottnaddle",
+  "authorUrl": "https://github.com/scottnaddle",
+  "isDesktopOnly": false
+}
