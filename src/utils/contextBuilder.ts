@@ -1,5 +1,7 @@
 import { App, TFile, TFolder } from "obsidian";
 import type { ContextRef } from "./chatSession";
+import type { VectorStore } from "./vectorStore";
+import type { EmbeddingsClient } from "./embeddings";
 
 /**
  * pin된 컨텍스트 참조 배열을 실제 텍스트 블록으로 조립.
@@ -81,4 +83,40 @@ export function activeFileRef(app: App): ContextRef | null {
 	const file = app.workspace.getActiveFile();
 	if (!file) return null;
 	return { id: file.path, label: file.basename, kind: "note" };
+}
+
+export interface RagHit {
+	path: string;
+	headingPath: string;
+	text: string;
+	score: number;
+}
+
+/**
+ * 쿼리로 vectorStore에서 top-K 청크 검색 후 프롬프트용 블록으로 조립.
+ */
+export async function buildRagBlock(
+	query: string,
+	store: VectorStore,
+	client: EmbeddingsClient,
+	topK: number
+): Promise<{ block: string; hits: RagHit[] }> {
+	const results = await store.search(query, client, topK);
+	if (results.length === 0) return { block: "", hits: [] };
+
+	const hits: RagHit[] = results.map((r) => ({
+		path: r.path,
+		headingPath: r.headingPath,
+		text: r.text,
+		score: r.score,
+	}));
+
+	const block = results
+		.map(
+			(r, i) =>
+				`### [${i + 1}] ${r.path}${r.headingPath ? " · " + r.headingPath : ""} (유사도 ${r.score.toFixed(2)})\n${r.text}`
+		)
+		.join("\n\n");
+
+	return { block: `## 🔍 자동 검색된 근거\n${block}`, hits };
 }

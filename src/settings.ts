@@ -14,6 +14,9 @@ export interface BidIntelligenceSettings {
 	analysisFolder: string;
 	chatHistoryLimit: number;
 	systemPromptOverride: string;
+	ragEnabled: boolean;
+	ragTopK: number;
+	embeddingModel: string;
 }
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
@@ -28,6 +31,9 @@ export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	analysisFolder: DEFAULT_ANALYSIS_FOLDER,
 	chatHistoryLimit: 20,
 	systemPromptOverride: "",
+	ragEnabled: true,
+	ragTopK: 5,
+	embeddingModel: "text-embedding-004",
 };
 
 /** 경로 문자열 정규화 (선후 슬래시 제거, 백슬래시→슬래시) */
@@ -200,6 +206,64 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 				text.inputEl.rows = 5;
 				text.inputEl.style.width = "100%";
 			});
+
+		// ── RAG 설정 ──
+		containerEl.createEl("h3", { text: "🔍 RAG (자동 근거 검색)" });
+
+		new Setting(containerEl)
+			.setName("RAG 활성화")
+			.setDesc("채팅 질문 시 컨텍스트 폴더에서 관련 청크를 자동 검색해 프롬프트에 주입합니다.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.ragEnabled).onChange(async (v) => {
+					this.plugin.settings.ragEnabled = v;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("검색 Top K")
+			.setDesc("질문당 가져올 관련 청크 개수. 기본 5.")
+			.addText((text) =>
+				text
+					.setPlaceholder("5")
+					.setValue(String(this.plugin.settings.ragTopK))
+					.onChange(async (value) => {
+						const n = parseInt(value, 10);
+						this.plugin.settings.ragTopK = Number.isFinite(n) && n > 0 ? n : 5;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("임베딩 모델")
+			.setDesc("현재 Gemini text-embedding-004만 지원.")
+			.addText((text) =>
+				text
+					.setValue(this.plugin.settings.embeddingModel)
+					.setDisabled(true)
+			);
+
+		new Setting(containerEl)
+			.setName("볼트 재인덱싱")
+			.setDesc("컨텍스트 폴더 전체를 다시 임베딩합니다. 파일 수에 비례한 시간 소요.")
+			.addButton((button) =>
+				button.setButtonText("재인덱싱").onClick(async () => {
+					button.setDisabled(true);
+					button.setButtonText("인덱싱 중...");
+					try {
+						await this.plugin.indexVault((done, total) =>
+							button.setButtonText(`${done}/${total}`)
+						);
+						button.setButtonText("✓ 완료");
+					} catch (e: any) {
+						button.setButtonText(`❌ ${e.message?.slice(0, 20) ?? "오류"}`);
+					}
+					setTimeout(() => {
+						button.setButtonText("재인덱싱");
+						button.setDisabled(false);
+					}, 3000);
+				})
+			);
 
 		// ── 브리핑 설정 ──
 		containerEl.createEl("h3", { text: "📋 브리핑" });

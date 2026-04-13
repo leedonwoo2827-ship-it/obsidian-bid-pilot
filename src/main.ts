@@ -15,15 +15,20 @@ import {
 	DEFAULT_SETTINGS,
 } from "./settings";
 import { GeminiClient } from "./utils/gemini";
+import { EmbeddingsClient } from "./utils/embeddings";
+import { VectorStore } from "./utils/vectorStore";
 import { updateFrontmatter, addFrontmatter, getFrontmatter } from "./utils/frontmatter";
 
 export default class BidIntelligencePlugin extends Plugin {
 	settings: BidIntelligenceSettings = DEFAULT_SETTINGS;
 	gemini: GeminiClient | null = null;
+	embeddings: EmbeddingsClient | null = null;
+	vectorStore: VectorStore | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.initGemini();
+		this.initRag();
 
 		// Settings tab
 		this.addSettingTab(new BidIntelligenceSettingTab(this.app, this));
@@ -59,6 +64,12 @@ export default class BidIntelligencePlugin extends Plugin {
 			callback: () => this.analyzeAllContext(),
 		});
 
+		this.addCommand({
+			id: "index-vault",
+			name: "컨텍스트 볼트 재인덱싱 (RAG)",
+			callback: () => this.indexVault(),
+		});
+
 		// Ribbon icons
 		this.addRibbonIcon("database", "컨텍스트 매니저", () => {
 			this.activateView(VIEW_TYPE_CONTEXT, "left");
@@ -80,6 +91,33 @@ export default class BidIntelligencePlugin extends Plugin {
 			);
 		}
 
+		// RAG 증분 인덱싱
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => {
+				if (file instanceof TFile && this.shouldIndex(file)) {
+					setTimeout(() => this.indexFileQuiet(file), 2000);
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				if (file instanceof TFile && this.vectorStore) {
+					this.vectorStore.removeFile(file.path);
+					void this.vectorStore.save();
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (this.vectorStore) {
+					this.vectorStore.removeFile(oldPath);
+					if (file instanceof TFile && this.shouldIndex(file)) {
+						setTimeout(() => this.indexFileQuiet(file), 500);
+					}
+				}
+			})
+		);
+
 		// Auto-open context manager on startup
 		this.app.workspace.onLayoutReady(() => {
 			this.activateView(VIEW_TYPE_CONTEXT, "left");
@@ -100,6 +138,7 @@ export default class BidIntelligencePlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		this.initGemini();
+		this.initRag();
 	}
 
 	private initGemini(): void {
@@ -111,6 +150,45 @@ export default class BidIntelligencePlugin extends Plugin {
 		} else {
 			this.gemini = null;
 		}
+	}
+
+	private initRag(): void {
+		if (!this.settings.geminiApiKey) {
+			this.embeddings = null;
+			this.vectorStore = null;
+			return;
+		}
+		this.embeddings = new EmbeddingsClient(
+			this.settings.geminiApiKey,
+			this.settings.embeddingModel
+		);
+		this.vectorStore = new VectorStore(
+			this.app,
+			this.manifest.id,
+			this.settings.embeddingModel
+		);
+	}
+
+	/**
+	 * 컨텍스트 폴더 전체를 재인덱싱.
+	 * 설정 UI의 버튼과 명령 팔레트에서 호출.
+	 */
+	async indexVault(
+		onProgress?: (done: number, total: number) => void
+	): Promise<{ files: number; chunks: number }> {
+		if (!this.embeddings || !this.vectorStore) {
+			new Notice("Gemini API 키가 설정되지 않았습니다.");
+			throw new Error("no-api-key");
+		}
+		const folder = this.settings.contextFolder;
+		new Notice(`🔍 ${folder}/ 인덱싱 시작...`);
+		const result = await this.vectorStore.reindex(
+			folder,
+			this.embeddings,
+			onProgress
+		);
+		new Notice(`✅ 인덱싱 완료: ${result.files}개 파일, ${result.chunks}개 청크`);
+		return result;
 	}
 
 	/**
@@ -212,6 +290,27 @@ export default class BidIntelligencePlugin extends Plugin {
 		if (file.extension !== "md") return false;
 		return file.path.startsWith(this.settings.contextFolder + "/") ||
 			file.path.startsWith(this.settings.analysisFolder + "/");
+	}
+
+	/**
+	 * 파일이 RAG 인덱싱 대상인지 확인 (컨텍스트 폴더 내 마크다운만).
+	 */
+	private shouldIndex(file: TFile): boolean {
+		if (file.extension !== "md") return false;
+		return file.path.startsWith(this.settings.contextFolder + "/");
+	}
+
+	/**
+	 * 단일 파일을 조용히 증분 인덱싱 (UI 알림 없음).
+	 */
+	private async indexFileQuiet(file: TFile): Promise<void> {
+		if (!this.embeddings || !this.vectorStore) return;
+		try {
+			await this.vectorStore.indexFile(file, this.embeddings);
+			await this.vectorStore.save();
+		} catch (e) {
+			console.warn("indexFileQuiet failed:", file.path, e);
+		}
 	}
 
 	/**

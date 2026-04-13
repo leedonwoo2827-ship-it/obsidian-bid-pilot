@@ -9,7 +9,7 @@ import {
 import { VIEW_TYPE_CHAT } from "../utils/constants";
 import type BidIntelligencePlugin from "../main";
 import { ChatSession, type ContextRef, type UiMessage } from "../utils/chatSession";
-import { buildContextBlock, activeFileRef } from "../utils/contextBuilder";
+import { buildContextBlock, buildRagBlock, activeFileRef } from "../utils/contextBuilder";
 
 const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.
 사용자가 제공한 회사 자료·공고문·경쟁사 정보를 근거로 제안서 작성을 돕습니다.
@@ -204,17 +204,49 @@ export class ChatView extends ItemView {
 		this.renderMessages();
 
 		try {
-			// 컨텍스트 조립 → 첫 턴의 user 텍스트에 앞에 prepend
+			// 핀 컨텍스트 조립
 			const contextBlock = await buildContextBlock(
 				this.app,
 				this.session.pinnedContext
 			);
 
+			// RAG 자동 검색 (활성화 시)
+			let ragBlock = "";
+			let ragHitLabels: string[] = [];
+			if (
+				this.plugin.settings.ragEnabled &&
+				this.plugin.vectorStore &&
+				this.plugin.embeddings &&
+				this.plugin.vectorStore.size() > 0
+			) {
+				try {
+					const rag = await buildRagBlock(
+						text,
+						this.plugin.vectorStore,
+						this.plugin.embeddings,
+						this.plugin.settings.ragTopK
+					);
+					ragBlock = rag.block;
+					ragHitLabels = rag.hits.map((h) => h.path);
+					if (ragHitLabels.length > 0) {
+						// 사용자 메시지에 참조 라벨 보강
+						const userMsg = this.session.messages[this.session.messages.length - 2];
+						userMsg.contextLabels = [
+							...(userMsg.contextLabels ?? []),
+							...ragHitLabels.map((p) => `🔍 ${p}`),
+						];
+					}
+				} catch (e) {
+					console.warn("RAG search failed:", e);
+				}
+			}
+
 			const history = this.session.toApiMessages(this.plugin.settings.chatHistoryLimit ?? 20);
 			// history 마지막은 방금 추가한 사용자 메시지. 여기에 컨텍스트를 prepend.
-			if (history.length > 0 && contextBlock) {
+			const combined = [contextBlock, ragBlock].filter(Boolean).join("\n\n");
+			if (history.length > 0 && combined) {
 				const last = history[history.length - 1];
-				last.text = `# 참조 컨텍스트\n${contextBlock}\n\n# 질문\n${last.text}`;
+				last.text = `# 참조 컨텍스트\n${combined}\n\n# 질문\n${last.text}`;
 			}
 
 			const systemPrompt =
