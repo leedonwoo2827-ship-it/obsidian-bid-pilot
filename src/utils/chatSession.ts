@@ -20,6 +20,10 @@ export interface UiMessage {
 	pending?: boolean;
 	/** 이 메시지에 포함된 컨텍스트 라벨들 (표시용) */
 	contextLabels?: string[];
+	/** 멀티모달: 첨부된 이미지 base64 (그래프 캡처 등) */
+	attachments?: { mimeType: string; base64: string; label: string }[];
+	/** 멀티모달: 프리페치된 텍스트(유튜브 자막) */
+	prefetchedText?: { label: string; text: string }[];
 }
 
 export class ChatSession {

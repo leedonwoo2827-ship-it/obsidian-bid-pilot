@@ -70,6 +70,19 @@ export default class BidIntelligencePlugin extends Plugin {
 			callback: () => this.indexVault(),
 		});
 
+		this.addCommand({
+			id: "open-chat-with-graph",
+			name: "그래프를 채팅에 첨부하고 열기",
+			callback: async () => {
+				await this.activateView(VIEW_TYPE_CHAT, "right");
+				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
+				const view = leaves[0]?.view as any;
+				if (view && typeof view.attachGraph === "function") {
+					view.attachGraph();
+				}
+			},
+		});
+
 		// Ribbon icons
 		this.addRibbonIcon("database", "컨텍스트 매니저", () => {
 			this.activateView(VIEW_TYPE_CONTEXT, "left");

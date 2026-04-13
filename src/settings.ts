@@ -17,6 +17,7 @@ export interface BidIntelligenceSettings {
 	ragEnabled: boolean;
 	ragTopK: number;
 	embeddingModel: string;
+	youtubeCaptionLang: string;
 }
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	ragEnabled: true,
 	ragTopK: 5,
 	embeddingModel: "text-embedding-004",
+	youtubeCaptionLang: "ko,en",
 };
 
 /** 경로 문자열 정규화 (선후 슬래시 제거, 백슬래시→슬래시) */
@@ -263,6 +265,22 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 						button.setDisabled(false);
 					}, 3000);
 				})
+			);
+
+		// ── 멀티미디어 설정 ──
+		containerEl.createEl("h3", { text: "🎬 멀티미디어" });
+
+		new Setting(containerEl)
+			.setName("YouTube 자막 언어 우선순위")
+			.setDesc("쉼표로 구분한 언어 코드. 예: ko,en 이면 한국어 우선, 없으면 영어.")
+			.addText((text) =>
+				text
+					.setPlaceholder("ko,en")
+					.setValue(this.plugin.settings.youtubeCaptionLang)
+					.onChange(async (value) => {
+						this.plugin.settings.youtubeCaptionLang = value.trim() || "ko,en";
+						await this.plugin.saveSettings();
+					})
 			);
 
 		// ── 브리핑 설정 ──

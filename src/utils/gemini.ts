@@ -190,10 +190,24 @@ ${content.slice(0, 6000)}
 		const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
 		const body: any = {
-			contents: messages.map((m) => ({
-				role: m.role,
-				parts: [{ text: m.text }],
-			})),
+			contents: messages.map((m) => {
+				const parts: any[] = [{ text: m.text }];
+				if (m.parts) {
+					for (const p of m.parts) {
+						if (p.imageBase64) {
+							parts.push({
+								inlineData: {
+									mimeType: p.imageMimeType ?? "image/png",
+									data: p.imageBase64,
+								},
+							});
+						} else if (p.text) {
+							parts.push({ text: p.text });
+						}
+					}
+				}
+				return { role: m.role, parts };
+			}),
 			generationConfig: {
 				temperature: opts.temperature ?? 0.5,
 				maxOutputTokens: opts.maxOutputTokens ?? 4096,
@@ -255,9 +269,18 @@ ${content.slice(0, 6000)}
 	}
 }
 
+export interface ChatMessagePart {
+	text?: string;
+	/** base64 인코딩된 이미지 데이터 (data: prefix 없이 순수 base64) */
+	imageBase64?: string;
+	imageMimeType?: string;
+}
+
 export interface ChatMessage {
 	role: "user" | "model";
 	text: string;
+	/** 선택: 이미지 등 추가 파트. 있으면 text와 함께 전송. */
+	parts?: ChatMessagePart[];
 }
 
 const SYSTEM_INSTRUCTION = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.
