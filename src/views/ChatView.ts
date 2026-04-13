@@ -12,8 +12,10 @@ import { ChatSession, type ContextRef, type UiMessage } from "../utils/chatSessi
 import { buildContextBlock, buildRagBlock, activeFileRef } from "../utils/contextBuilder";
 import { extractVideoId, fetchYoutubeTranscript } from "../utils/youtube";
 import { captureGraphBase64 } from "../utils/graphCapture";
-import type { ChatMessage } from "../utils/gemini";
+import type { ChatMessage, GeminiToolDeclaration } from "../utils/gemini";
+import type { McpTool } from "../utils/mcpClient";
 import { ApplyEditModal, parseEditProposals } from "./ApplyEditModal";
+import { loadGuardrails } from "../utils/guardrails";
 
 const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.
 사용자가 제공한 회사 자료·공고문·경쟁사 정보를 근거로 제안서 작성을 돕습니다.
@@ -396,8 +398,17 @@ export class ChatView extends ItemView {
 			this.pendingPrefetched = [];
 			this.renderAttachQueue();
 
-			const systemPrompt =
-				this.plugin.settings.systemPromptOverride?.trim() || DEFAULT_CHAT_SYSTEM_PROMPT;
+			// 시스템 프롬프트 우선순위:
+			// 1) 설정 override (있으면 그대로)
+			// 2) _memory/quality-guardrails.md의 "작성 원칙" 섹션 (있으면 기본과 결합)
+			// 3) 인라인 기본 프롬프트
+			let systemPrompt = this.plugin.settings.systemPromptOverride?.trim();
+			if (!systemPrompt) {
+				const guardrails = await loadGuardrails(this.app);
+				systemPrompt = guardrails
+					? `${DEFAULT_CHAT_SYSTEM_PROMPT}\n\n# 볼트 규범 (_memory/quality-guardrails.md)\n${guardrails}`
+					: DEFAULT_CHAT_SYSTEM_PROMPT;
+			}
 
 			this.abortCtrl = new AbortController();
 
@@ -405,15 +416,52 @@ export class ChatView extends ItemView {
 			const lastWrap = this.messagesEl.lastElementChild as HTMLElement;
 			const bodyEl = lastWrap.querySelector(".bi-chat-msg-body") as HTMLElement;
 
-			await this.plugin.gemini.generateStream(history, {
-				systemInstruction: systemPrompt,
-				signal: this.abortCtrl.signal,
-				onChunk: (delta) => {
-					assistant.text += delta;
-					this.renderBody(bodyEl, assistant);
-					this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
-				},
-			});
+			// MCP 도구가 등록되어 있으면 tool-calling 루프 사용 (비스트리밍)
+			const mcpTools: McpTool[] =
+				this.plugin.mcpRegistry.size() > 0
+					? await this.plugin.mcpRegistry.listAllTools().catch(() => [])
+					: [];
+
+			if (mcpTools.length > 0) {
+				const decls: GeminiToolDeclaration[] = mcpTools.map((t) => ({
+					name: `${t._server}__${t.name}`, // 서버 구분 prefix
+					description: t.description,
+					parameters: t.inputSchema,
+				}));
+
+				await this.plugin.gemini.generateWithTools(history, {
+					systemInstruction: systemPrompt,
+					tools: decls,
+					toolHandler: async (call) => {
+						const [serverName, ...rest] = call.name.split("__");
+						const toolName = rest.join("__");
+						return this.plugin.mcpRegistry.callTool(
+							serverName,
+							toolName,
+							call.args
+						);
+					},
+					onAssistantText: (t) => {
+						assistant.text += t;
+						this.renderBody(bodyEl, assistant);
+						this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+					},
+					onToolCall: (name, args) => {
+						assistant.text += `\n\n🔧 **도구 호출**: \`${name}\` ${JSON.stringify(args).slice(0, 80)}\n`;
+						this.renderBody(bodyEl, assistant);
+					},
+				});
+			} else {
+				await this.plugin.gemini.generateStream(history, {
+					systemInstruction: systemPrompt,
+					signal: this.abortCtrl.signal,
+					onChunk: (delta) => {
+						assistant.text += delta;
+						this.renderBody(bodyEl, assistant);
+						this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+					},
+				});
+			}
 		} catch (e: any) {
 			if (e.name === "AbortError") {
 				assistant.text += "\n\n_(중단됨)_";

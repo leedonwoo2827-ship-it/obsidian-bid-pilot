@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type BidIntelligencePlugin from "./main";
 import { DEFAULT_CONTEXT_FOLDER, DEFAULT_ANALYSIS_FOLDER } from "./utils/constants";
+import type { McpServerConfig } from "./utils/mcpClient";
 
 export interface BidIntelligenceSettings {
 	geminiApiKey: string;
@@ -18,6 +19,7 @@ export interface BidIntelligenceSettings {
 	ragTopK: number;
 	embeddingModel: string;
 	youtubeCaptionLang: string;
+	mcpServers: McpServerConfig[];
 }
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
@@ -36,6 +38,7 @@ export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	ragTopK: 5,
 	embeddingModel: "text-embedding-004",
 	youtubeCaptionLang: "ko,en",
+	mcpServers: [],
 };
 
 /** 경로 문자열 정규화 (선후 슬래시 제거, 백슬래시→슬래시) */
@@ -264,6 +267,58 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 						button.setButtonText("재인덱싱");
 						button.setDisabled(false);
 					}, 3000);
+				})
+			);
+
+		// ── MCP 설정 ──
+		containerEl.createEl("h3", { text: "🔌 MCP 서버 (도구 통합)" });
+
+		const mcpDesc = containerEl.createEl("p", {
+			cls: "setting-item-description",
+		});
+		mcpDesc.innerHTML = `
+			Model Context Protocol(HTTP 전송)을 지원하는 외부 서버를 등록하면
+			채팅 중 도구 호출이 가능합니다. (예: Slack 라우팅, 캘린더 조회)
+			<br>• JSON 배열 형식으로 입력: <code>[{"name":"slack","url":"https://...","enabled":true}]</code>
+			<br>• stdio 전송 서버는 미지원 — HTTP/SSE 엔드포인트만 사용하세요.
+		`;
+
+		new Setting(containerEl)
+			.setName("MCP 서버 목록 (JSON)")
+			.setDesc("각 항목: name, url, enabled, authHeader(선택)")
+			.addTextArea((text) => {
+				text.setValue(JSON.stringify(this.plugin.settings.mcpServers, null, 2)).onChange(
+					async (value) => {
+						try {
+							const parsed = JSON.parse(value);
+							if (Array.isArray(parsed)) {
+								this.plugin.settings.mcpServers = parsed;
+								await this.plugin.saveSettings();
+							}
+						} catch {
+							// 유효하지 않은 JSON이면 저장하지 않음 (blur 시점까지 대기)
+						}
+					}
+				);
+				text.inputEl.rows = 6;
+				text.inputEl.style.width = "100%";
+				text.inputEl.style.fontFamily = "var(--font-monospace)";
+			});
+
+		new Setting(containerEl)
+			.setName("MCP 도구 목록 확인")
+			.setDesc("등록된 서버에서 사용 가능한 도구를 가져와 콘솔에 출력.")
+			.addButton((button) =>
+				button.setButtonText("도구 조회").onClick(async () => {
+					button.setButtonText("조회 중...");
+					try {
+						const tools = await this.plugin.mcpRegistry.listAllTools();
+						console.log("[bid-intelligence MCP tools]", tools);
+						button.setButtonText(`✓ ${tools.length}개 도구`);
+					} catch (e: any) {
+						button.setButtonText(`❌ ${e.message?.slice(0, 20) ?? "오류"}`);
+					}
+					setTimeout(() => button.setButtonText("도구 조회"), 3000);
 				})
 			);
 

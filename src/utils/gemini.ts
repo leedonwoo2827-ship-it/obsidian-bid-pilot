@@ -190,24 +190,10 @@ ${content.slice(0, 6000)}
 		const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
 		const body: any = {
-			contents: messages.map((m) => {
-				const parts: any[] = [{ text: m.text }];
-				if (m.parts) {
-					for (const p of m.parts) {
-						if (p.imageBase64) {
-							parts.push({
-								inlineData: {
-									mimeType: p.imageMimeType ?? "image/png",
-									data: p.imageBase64,
-								},
-							});
-						} else if (p.text) {
-							parts.push({ text: p.text });
-						}
-					}
-				}
-				return { role: m.role, parts };
-			}),
+			contents: messages.map((m) => ({
+				role: m.role,
+				parts: serializeMessageParts(m),
+			})),
 			generationConfig: {
 				temperature: opts.temperature ?? 0.5,
 				maxOutputTokens: opts.maxOutputTokens ?? 4096,
@@ -267,6 +253,154 @@ ${content.slice(0, 6000)}
 
 		return full;
 	}
+
+	/**
+	 * function calling 루프 (비스트리밍).
+	 * tools가 있으면 모델 응답에 functionCall이 포함될 수 있고,
+	 * toolHandler로 실행 결과를 받아 다음 턴에 functionResponse로 전달.
+	 * functionCall 없는 응답이 올 때까지 최대 maxRounds 회 반복.
+	 */
+	async generateWithTools(
+		messages: ChatMessage[],
+		opts: {
+			systemInstruction?: string;
+			tools: GeminiToolDeclaration[];
+			toolHandler: (call: GeminiFunctionCall) => Promise<any>;
+			onAssistantText?: (text: string) => void;
+			onToolCall?: (name: string, args: any) => void;
+			maxRounds?: number;
+			temperature?: number;
+		}
+	): Promise<string> {
+		const url = `${BASE_URL}/${this.model}:generateContent?key=${this.apiKey}`;
+		const maxRounds = opts.maxRounds ?? 5;
+		const convo: ChatMessage[] = [...messages];
+		let finalText = "";
+
+		for (let round = 0; round < maxRounds; round++) {
+			const body: any = {
+				contents: convo.map((m) => ({
+					role: m.role,
+					parts: serializeMessageParts(m),
+				})),
+				generationConfig: {
+					temperature: opts.temperature ?? 0.4,
+					maxOutputTokens: 4096,
+				},
+				tools: [
+					{
+						functionDeclarations: opts.tools.map((t) => ({
+							name: t.name,
+							description: t.description,
+							parameters: t.parameters,
+						})),
+					},
+				],
+			};
+			if (opts.systemInstruction) {
+				body.systemInstruction = {
+					parts: [{ text: opts.systemInstruction }],
+				};
+			}
+
+			const res = await requestUrl({
+				url,
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			if (res.status !== 200) {
+				throw new Error(`Gemini tool call 오류: ${res.status}`);
+			}
+
+			const parts: any[] = res.json?.candidates?.[0]?.content?.parts ?? [];
+			const calls: GeminiFunctionCall[] = [];
+			let textChunk = "";
+			for (const p of parts) {
+				if (p.text) textChunk += p.text;
+				if (p.functionCall) {
+					calls.push({
+						name: p.functionCall.name,
+						args: p.functionCall.args ?? {},
+					});
+				}
+			}
+
+			if (textChunk) {
+				finalText += textChunk;
+				opts.onAssistantText?.(textChunk);
+			}
+
+			if (calls.length === 0) {
+				return finalText || textChunk;
+			}
+
+			// 모델의 functionCall 응답을 대화에 추가
+			convo.push({
+				role: "model",
+				text: textChunk,
+				parts: calls.map((c) => ({ functionCall: c })),
+			});
+
+			// tool 실행 → functionResponse를 user 역할로 추가
+			const responseParts: ChatMessagePart[] = [];
+			for (const c of calls) {
+				opts.onToolCall?.(c.name, c.args);
+				try {
+					const result = await opts.toolHandler(c);
+					responseParts.push({
+						functionResponse: { name: c.name, response: result },
+					});
+				} catch (e: any) {
+					responseParts.push({
+						functionResponse: {
+							name: c.name,
+							response: { error: e.message || String(e) },
+						},
+					});
+				}
+			}
+			convo.push({ role: "user", text: "", parts: responseParts });
+		}
+
+		return finalText;
+	}
+}
+
+function serializeMessageParts(m: ChatMessage): any[] {
+	const parts: any[] = [];
+	if (m.text) parts.push({ text: m.text });
+	if (m.parts) {
+		for (const p of m.parts) {
+			if (p.text) {
+				parts.push({ text: p.text });
+			} else if (p.imageBase64) {
+				parts.push({
+					inlineData: {
+						mimeType: p.imageMimeType ?? "image/png",
+						data: p.imageBase64,
+					},
+				});
+			} else if (p.functionCall) {
+				parts.push({
+					functionCall: {
+						name: p.functionCall.name,
+						args: p.functionCall.args,
+					},
+				});
+			} else if (p.functionResponse) {
+				parts.push({
+					functionResponse: {
+						name: p.functionResponse.name,
+						response: p.functionResponse.response,
+					},
+				});
+			}
+		}
+	}
+	// text가 비었고 parts도 없으면 빈 text part를 하나 넣어야 Gemini가 거부하지 않음
+	if (parts.length === 0) parts.push({ text: "" });
+	return parts;
 }
 
 export interface ChatMessagePart {
@@ -274,6 +408,10 @@ export interface ChatMessagePart {
 	/** base64 인코딩된 이미지 데이터 (data: prefix 없이 순수 base64) */
 	imageBase64?: string;
 	imageMimeType?: string;
+	/** Gemini functionCall (모델이 호출을 요청) */
+	functionCall?: GeminiFunctionCall;
+	/** Gemini functionResponse (클라이언트가 실행 결과를 전달) */
+	functionResponse?: { name: string; response: any };
 }
 
 export interface ChatMessage {
@@ -281,6 +419,17 @@ export interface ChatMessage {
 	text: string;
 	/** 선택: 이미지 등 추가 파트. 있으면 text와 함께 전송. */
 	parts?: ChatMessagePart[];
+}
+
+export interface GeminiToolDeclaration {
+	name: string;
+	description?: string;
+	parameters: any; // JSON Schema
+}
+
+export interface GeminiFunctionCall {
+	name: string;
+	args: Record<string, any>;
 }
 
 const SYSTEM_INSTRUCTION = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.

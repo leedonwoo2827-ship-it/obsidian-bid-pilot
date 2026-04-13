@@ -17,6 +17,7 @@ import {
 import { GeminiClient } from "./utils/gemini";
 import { EmbeddingsClient } from "./utils/embeddings";
 import { VectorStore } from "./utils/vectorStore";
+import { McpRegistry } from "./utils/mcpClient";
 import { updateFrontmatter, addFrontmatter, getFrontmatter } from "./utils/frontmatter";
 
 export default class BidIntelligencePlugin extends Plugin {
@@ -24,11 +25,13 @@ export default class BidIntelligencePlugin extends Plugin {
 	gemini: GeminiClient | null = null;
 	embeddings: EmbeddingsClient | null = null;
 	vectorStore: VectorStore | null = null;
+	mcpRegistry: McpRegistry = new McpRegistry();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.initGemini();
 		this.initRag();
+		this.initMcp();
 
 		// Settings tab
 		this.addSettingTab(new BidIntelligenceSettingTab(this.app, this));
@@ -152,6 +155,7 @@ export default class BidIntelligencePlugin extends Plugin {
 		await this.saveData(this.settings);
 		this.initGemini();
 		this.initRag();
+		this.initMcp();
 	}
 
 	private initGemini(): void {
@@ -163,6 +167,10 @@ export default class BidIntelligencePlugin extends Plugin {
 		} else {
 			this.gemini = null;
 		}
+	}
+
+	private initMcp(): void {
+		this.mcpRegistry.setServers(this.settings.mcpServers ?? []);
 	}
 
 	private initRag(): void {

@@ -137,10 +137,47 @@ var gemini_exports = {};
 __export(gemini_exports, {
   GeminiClient: () => GeminiClient
 });
-var import_obsidian9, BASE_URL, GeminiClient, SYSTEM_INSTRUCTION;
+function serializeMessageParts(m) {
+  var _a;
+  const parts = [];
+  if (m.text)
+    parts.push({ text: m.text });
+  if (m.parts) {
+    for (const p of m.parts) {
+      if (p.text) {
+        parts.push({ text: p.text });
+      } else if (p.imageBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: (_a = p.imageMimeType) != null ? _a : "image/png",
+            data: p.imageBase64
+          }
+        });
+      } else if (p.functionCall) {
+        parts.push({
+          functionCall: {
+            name: p.functionCall.name,
+            args: p.functionCall.args
+          }
+        });
+      } else if (p.functionResponse) {
+        parts.push({
+          functionResponse: {
+            name: p.functionResponse.name,
+            response: p.functionResponse.response
+          }
+        });
+      }
+    }
+  }
+  if (parts.length === 0)
+    parts.push({ text: "" });
+  return parts;
+}
+var import_obsidian10, BASE_URL, GeminiClient, SYSTEM_INSTRUCTION;
 var init_gemini = __esm({
   "src/utils/gemini.ts"() {
-    import_obsidian9 = require("obsidian");
+    import_obsidian10 = require("obsidian");
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
     GeminiClient = class {
       constructor(apiKey, model) {
@@ -180,7 +217,7 @@ var init_gemini = __esm({
             parts: [{ text: systemInstruction }]
           };
         }
-        const response = await (0, import_obsidian9.requestUrl)({
+        const response = await (0, import_obsidian10.requestUrl)({
           url,
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -297,25 +334,10 @@ ${content.slice(0, 6e3)}
         var _a, _b, _c, _d, _e, _f, _g, _h, _i;
         const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
         const body = {
-          contents: messages.map((m) => {
-            var _a2;
-            const parts = [{ text: m.text }];
-            if (m.parts) {
-              for (const p of m.parts) {
-                if (p.imageBase64) {
-                  parts.push({
-                    inlineData: {
-                      mimeType: (_a2 = p.imageMimeType) != null ? _a2 : "image/png",
-                      data: p.imageBase64
-                    }
-                  });
-                } else if (p.text) {
-                  parts.push({ text: p.text });
-                }
-              }
-            }
-            return { role: m.role, parts };
-          }),
+          contents: messages.map((m) => ({
+            role: m.role,
+            parts: serializeMessageParts(m)
+          })),
           generationConfig: {
             temperature: (_a = opts.temperature) != null ? _a : 0.5,
             maxOutputTokens: (_b = opts.maxOutputTokens) != null ? _b : 4096
@@ -365,6 +387,98 @@ ${content.slice(0, 6e3)}
         }
         return full;
       }
+      /**
+       * function calling 루프 (비스트리밍).
+       * tools가 있으면 모델 응답에 functionCall이 포함될 수 있고,
+       * toolHandler로 실행 결과를 받아 다음 턴에 functionResponse로 전달.
+       * functionCall 없는 응답이 올 때까지 최대 maxRounds 회 반복.
+       */
+      async generateWithTools(messages, opts) {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+        const url = `${BASE_URL}/${this.model}:generateContent?key=${this.apiKey}`;
+        const maxRounds = (_a = opts.maxRounds) != null ? _a : 5;
+        const convo = [...messages];
+        let finalText = "";
+        for (let round = 0; round < maxRounds; round++) {
+          const body = {
+            contents: convo.map((m) => ({
+              role: m.role,
+              parts: serializeMessageParts(m)
+            })),
+            generationConfig: {
+              temperature: (_b = opts.temperature) != null ? _b : 0.4,
+              maxOutputTokens: 4096
+            },
+            tools: [
+              {
+                functionDeclarations: opts.tools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  parameters: t.parameters
+                }))
+              }
+            ]
+          };
+          if (opts.systemInstruction) {
+            body.systemInstruction = {
+              parts: [{ text: opts.systemInstruction }]
+            };
+          }
+          const res = await (0, import_obsidian10.requestUrl)({
+            url,
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          if (res.status !== 200) {
+            throw new Error(`Gemini tool call \uC624\uB958: ${res.status}`);
+          }
+          const parts = (_g = (_f = (_e = (_d = (_c = res.json) == null ? void 0 : _c.candidates) == null ? void 0 : _d[0]) == null ? void 0 : _e.content) == null ? void 0 : _f.parts) != null ? _g : [];
+          const calls = [];
+          let textChunk = "";
+          for (const p of parts) {
+            if (p.text)
+              textChunk += p.text;
+            if (p.functionCall) {
+              calls.push({
+                name: p.functionCall.name,
+                args: (_h = p.functionCall.args) != null ? _h : {}
+              });
+            }
+          }
+          if (textChunk) {
+            finalText += textChunk;
+            (_i = opts.onAssistantText) == null ? void 0 : _i.call(opts, textChunk);
+          }
+          if (calls.length === 0) {
+            return finalText || textChunk;
+          }
+          convo.push({
+            role: "model",
+            text: textChunk,
+            parts: calls.map((c) => ({ functionCall: c }))
+          });
+          const responseParts = [];
+          for (const c of calls) {
+            (_j = opts.onToolCall) == null ? void 0 : _j.call(opts, c.name, c.args);
+            try {
+              const result = await opts.toolHandler(c);
+              responseParts.push({
+                functionResponse: { name: c.name, response: result }
+              });
+            } catch (e) {
+              responseParts.push({
+                functionResponse: {
+                  name: c.name,
+                  response: { error: e.message || String(e) }
+                }
+              });
+            }
+          }
+          convo.push({ role: "user", text: "", parts: responseParts });
+        }
+        return finalText;
+      }
     };
     SYSTEM_INSTRUCTION = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\uACF5\uC870\uB2EC/ODA \uC218\uC8FC \uBD84\uC11D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4.
 \uD56D\uC0C1 \uD55C\uAD6D\uC5B4\uB85C \uC751\uB2F5\uD558\uC138\uC694.
@@ -379,7 +493,7 @@ __export(main_exports, {
   default: () => BidIntelligencePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian12 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // src/utils/constants.ts
 var VIEW_TYPE_CONTEXT = "bid-context-manager";
@@ -1156,7 +1270,7 @@ var AnalysisReportView = class extends import_obsidian3.ItemView {
 };
 
 // src/views/ChatView.ts
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // src/utils/chatSession.ts
 var ChatSession = class {
@@ -1609,6 +1723,29 @@ function parseEditProposals(responseText) {
   return result;
 }
 
+// src/utils/guardrails.ts
+var import_obsidian8 = require("obsidian");
+var GUARDRAILS_PATH = "_memory/quality-guardrails.md";
+var SECTION_HEADING = "## \uC791\uC131 \uC6D0\uCE59 (\uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8 \uC790\uB3D9 \uC8FC\uC785 \uB300\uC0C1)";
+async function loadGuardrails(app) {
+  const file = app.vault.getAbstractFileByPath(GUARDRAILS_PATH);
+  if (!(file instanceof import_obsidian8.TFile))
+    return null;
+  const content = await app.vault.cachedRead(file);
+  const lines = content.split(/\r?\n/);
+  const startIdx = lines.findIndex((l) => l.trim() === SECTION_HEADING);
+  if (startIdx === -1)
+    return null;
+  let endIdx = lines.length;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (/^#{1,2}\s+/.test(lines[i])) {
+      endIdx = i;
+      break;
+    }
+  }
+  return lines.slice(startIdx + 1, endIdx).join("\n").trim();
+}
+
 // src/views/ChatView.ts
 var DEFAULT_CHAT_SYSTEM_PROMPT = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\uACF5\uC870\uB2EC/ODA \uC218\uC8FC \uBD84\uC11D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4.
 \uC0AC\uC6A9\uC790\uAC00 \uC81C\uACF5\uD55C \uD68C\uC0AC \uC790\uB8CC\xB7\uACF5\uACE0\uBB38\xB7\uACBD\uC7C1\uC0AC \uC815\uBCF4\uB97C \uADFC\uAC70\uB85C \uC81C\uC548\uC11C \uC791\uC131\uC744 \uB3D5\uC2B5\uB2C8\uB2E4.
@@ -1630,7 +1767,7 @@ var DEFAULT_CHAT_SYSTEM_PROMPT = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\u
 mode \uAC12: replace(\uC804\uCCB4 \uAD50\uCCB4) / append(\uB05D\uC5D0 \uCD94\uAC00) / section(\uC139\uC158 \uAD50\uCCB4).
 target\uC744 \uC0DD\uB7B5\uD558\uBA74 \uD65C\uC131 \uD30C\uC77C\uC5D0 \uC801\uC6A9\uB429\uB2C8\uB2E4.
 \uC774 \uD0DC\uADF8 \uBC16\uC5D0\uB3C4 \uC124\uBA85\uC744 \uC790\uC720\uB86D\uAC8C \uC4F8 \uC218 \uC788\uC73C\uB098, \uC2E4\uC81C \uC801\uC6A9 \uB300\uC0C1\uC740 \uBC18\uB4DC\uC2DC \uD0DC\uADF8 \uC548\uC5D0\uB9CC \uB123\uC2B5\uB2C8\uB2E4.`;
-var ChatView = class extends import_obsidian8.ItemView {
+var ChatView = class extends import_obsidian9.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.session = new ChatSession();
@@ -1711,7 +1848,7 @@ var ChatView = class extends import_obsidian8.ItemView {
   pinActiveFile() {
     const ref = activeFileRef(this.app);
     if (!ref) {
-      new import_obsidian8.Notice("\uD65C\uC131 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian9.Notice("\uD65C\uC131 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     this.session.togglePin(ref);
@@ -1726,11 +1863,11 @@ var ChatView = class extends import_obsidian8.ItemView {
       base64: captured.base64,
       label: `\uADF8\uB798\uD504 (${captured.viewType})`
     });
-    new import_obsidian8.Notice("\uADF8\uB798\uD504 \uC774\uBBF8\uC9C0\uB97C \uB2E4\uC74C \uC804\uC1A1\uC5D0 \uCCA8\uBD80\uD569\uB2C8\uB2E4.");
+    new import_obsidian9.Notice("\uADF8\uB798\uD504 \uC774\uBBF8\uC9C0\uB97C \uB2E4\uC74C \uC804\uC1A1\uC5D0 \uCCA8\uBD80\uD569\uB2C8\uB2E4.");
     this.renderAttachQueue();
   }
   async attachYoutube(url) {
-    new import_obsidian8.Notice("YouTube \uC790\uB9C9\uC744 \uAC00\uC838\uC624\uB294 \uC911...");
+    new import_obsidian9.Notice("YouTube \uC790\uB9C9\uC744 \uAC00\uC838\uC624\uB294 \uC911...");
     try {
       const langs = this.plugin.settings.youtubeCaptionLang.split(",").map((s) => s.trim()).filter(Boolean);
       const t = await fetchYoutubeTranscript(url, langs.length > 0 ? langs : ["ko", "en"]);
@@ -1739,10 +1876,10 @@ var ChatView = class extends import_obsidian8.ItemView {
         text: `## \u25B6\uFE0F YouTube: ${t.title} (${t.language})
 ${t.text}`
       });
-      new import_obsidian8.Notice("\uC790\uB9C9\uC774 \uB2E4\uC74C \uC804\uC1A1\uC5D0 \uCCA8\uBD80\uB429\uB2C8\uB2E4.");
+      new import_obsidian9.Notice("\uC790\uB9C9\uC774 \uB2E4\uC74C \uC804\uC1A1\uC5D0 \uCCA8\uBD80\uB429\uB2C8\uB2E4.");
       this.renderAttachQueue();
     } catch (e) {
-      new import_obsidian8.Notice(`\u274C ${e.message || "\uC790\uB9C9 \uC218\uC9D1 \uC2E4\uD328"}`);
+      new import_obsidian9.Notice(`\u274C ${e.message || "\uC790\uB9C9 \uC218\uC9D1 \uC2E4\uD328"}`);
     }
   }
   renderAttachQueue() {
@@ -1836,7 +1973,7 @@ ${t.text}`
   renderBody(body, msg) {
     body.empty();
     if (msg.role === "assistant") {
-      import_obsidian8.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
+      import_obsidian9.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
       if (!msg.pending) {
         const proposals = parseEditProposals(msg.text);
         if (proposals.length > 0) {
@@ -1859,7 +1996,7 @@ ${t.text}`
   async handleSend() {
     var _a, _b, _c;
     if (!this.plugin.gemini) {
-      new import_obsidian8.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian9.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const text = this.inputEl.value.trim();
@@ -1933,19 +2070,61 @@ ${last.text}`;
       this.pendingAttachments = [];
       this.pendingPrefetched = [];
       this.renderAttachQueue();
-      const systemPrompt = ((_c = this.plugin.settings.systemPromptOverride) == null ? void 0 : _c.trim()) || DEFAULT_CHAT_SYSTEM_PROMPT;
+      let systemPrompt = (_c = this.plugin.settings.systemPromptOverride) == null ? void 0 : _c.trim();
+      if (!systemPrompt) {
+        const guardrails = await loadGuardrails(this.app);
+        systemPrompt = guardrails ? `${DEFAULT_CHAT_SYSTEM_PROMPT}
+
+# \uBCFC\uD2B8 \uADDC\uBC94 (_memory/quality-guardrails.md)
+${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
+      }
       this.abortCtrl = new AbortController();
       const lastWrap = this.messagesEl.lastElementChild;
       const bodyEl = lastWrap.querySelector(".bi-chat-msg-body");
-      await this.plugin.gemini.generateStream(history, {
-        systemInstruction: systemPrompt,
-        signal: this.abortCtrl.signal,
-        onChunk: (delta) => {
-          assistant.text += delta;
-          this.renderBody(bodyEl, assistant);
-          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
-        }
-      });
+      const mcpTools = this.plugin.mcpRegistry.size() > 0 ? await this.plugin.mcpRegistry.listAllTools().catch(() => []) : [];
+      if (mcpTools.length > 0) {
+        const decls = mcpTools.map((t) => ({
+          name: `${t._server}__${t.name}`,
+          // 서버 구분 prefix
+          description: t.description,
+          parameters: t.inputSchema
+        }));
+        await this.plugin.gemini.generateWithTools(history, {
+          systemInstruction: systemPrompt,
+          tools: decls,
+          toolHandler: async (call) => {
+            const [serverName, ...rest] = call.name.split("__");
+            const toolName = rest.join("__");
+            return this.plugin.mcpRegistry.callTool(
+              serverName,
+              toolName,
+              call.args
+            );
+          },
+          onAssistantText: (t) => {
+            assistant.text += t;
+            this.renderBody(bodyEl, assistant);
+            this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+          },
+          onToolCall: (name, args) => {
+            assistant.text += `
+
+\u{1F527} **\uB3C4\uAD6C \uD638\uCD9C**: \`${name}\` ${JSON.stringify(args).slice(0, 80)}
+`;
+            this.renderBody(bodyEl, assistant);
+          }
+        });
+      } else {
+        await this.plugin.gemini.generateStream(history, {
+          systemInstruction: systemPrompt,
+          signal: this.abortCtrl.signal,
+          onChunk: (delta) => {
+            assistant.text += delta;
+            this.renderBody(bodyEl, assistant);
+            this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+          }
+        });
+      }
     } catch (e) {
       if (e.name === "AbortError") {
         assistant.text += "\n\n_(\uC911\uB2E8\uB428)_";
@@ -2003,7 +2182,7 @@ ${last.text}`;
 };
 
 // src/settings.ts
-var import_obsidian10 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 var DEFAULT_SETTINGS = {
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
@@ -2019,7 +2198,8 @@ var DEFAULT_SETTINGS = {
   ragEnabled: true,
   ragTopK: 5,
   embeddingModel: "text-embedding-004",
-  youtubeCaptionLang: "ko,en"
+  youtubeCaptionLang: "ko,en",
+  mcpServers: []
 };
 function normalizeFolderPath(input, fallback) {
   if (!input)
@@ -2027,7 +2207,7 @@ function normalizeFolderPath(input, fallback) {
   const cleaned = input.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").trim();
   return cleaned || fallback;
 }
-var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab {
+var BidIntelligenceSettingTab = class extends import_obsidian11.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2047,7 +2227,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
 			<br>\u2022 \uD558\uC704 \uD504\uB85C\uC81D\uD2B8 \uC0AC\uC6A9 \uC2DC: <code>bid-pilot/_context</code> / <code>bid-pilot/_analysis</code>
 			<br>\u2022 \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14\uAC00 \uC989\uC2DC \uAC31\uC2E0\uB418\uC9C0 \uC54A\uC73C\uBA74 \uC544\uB798 "\uB2E4\uC2DC \uADF8\uB9AC\uAE30" \uBC84\uD2BC\uC744 \uB204\uB974\uC138\uC694.
 		`;
-    new import_obsidian10.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uD68C\uC0AC \uC790\uB8CC\uAC00 \uB4E4\uC5B4 \uC788\uB294 \uD3F4\uB354").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uD68C\uC0AC \uC790\uB8CC\uAC00 \uB4E4\uC5B4 \uC788\uB294 \uD3F4\uB354").addText(
       (text) => text.setPlaceholder("_context \uB610\uB294 bid-pilot/_context").setValue(this.plugin.settings.contextFolder).onChange(async (value) => {
         this.plugin.settings.contextFolder = normalizeFolderPath(
           value,
@@ -2056,7 +2236,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uBD84\uC11D \uACB0\uACFC \uD3F4\uB354 \uACBD\uB85C").setDesc("/bid-analyze, /brief \uACB0\uACFC\uAC00 \uC800\uC7A5\uB418\uB294 \uD3F4\uB354").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uBD84\uC11D \uACB0\uACFC \uD3F4\uB354 \uACBD\uB85C").setDesc("/bid-analyze, /brief \uACB0\uACFC\uAC00 \uC800\uC7A5\uB418\uB294 \uD3F4\uB354").addText(
       (text) => text.setPlaceholder("_analysis \uB610\uB294 bid-pilot/_analysis").setValue(this.plugin.settings.analysisFolder).onChange(async (value) => {
         this.plugin.settings.analysisFolder = normalizeFolderPath(
           value,
@@ -2065,7 +2245,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uBDF0 \uC989\uC2DC \uAC31\uC2E0").setDesc("\uACBD\uB85C \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14/\uB300\uC2DC\uBCF4\uB4DC\uB97C \uC9C0\uAE08 \uB2E4\uC2DC \uADF8\uB9BD\uB2C8\uB2E4.").addButton(
+    new import_obsidian11.Setting(containerEl).setName("\uBDF0 \uC989\uC2DC \uAC31\uC2E0").setDesc("\uACBD\uB85C \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14/\uB300\uC2DC\uBCF4\uB4DC\uB97C \uC9C0\uAE08 \uB2E4\uC2DC \uADF8\uB9BD\uB2C8\uB2E4.").addButton(
       (button) => button.setButtonText("\uB2E4\uC2DC \uADF8\uB9AC\uAE30").onClick(() => {
         this.plugin.refreshAllViews();
         button.setButtonText("\u2713 \uC644\uB8CC");
@@ -2073,40 +2253,40 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
       })
     );
     containerEl.createEl("h3", { text: "\u{1F916} AI \uC124\uC815" });
-    new import_obsidian10.Setting(containerEl).setName("Gemini API \uD0A4").setDesc("Google AI Studio\uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4\uB97C \uC785\uB825\uD558\uC138\uC694.").addText(
+    new import_obsidian11.Setting(containerEl).setName("Gemini API \uD0A4").setDesc("Google AI Studio\uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4\uB97C \uC785\uB825\uD558\uC138\uC694.").addText(
       (text) => text.setPlaceholder("AIzaSy...").setValue(this.plugin.settings.geminiApiKey).onChange(async (value) => {
         this.plugin.settings.geminiApiKey = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Gemini \uBAA8\uB378").setDesc("\uC0AC\uC6A9\uD560 Gemini \uBAA8\uB378\uC744 \uC120\uD0DD\uD558\uC138\uC694.").addDropdown(
+    new import_obsidian11.Setting(containerEl).setName("Gemini \uBAA8\uB378").setDesc("\uC0AC\uC6A9\uD560 Gemini \uBAA8\uB378\uC744 \uC120\uD0DD\uD558\uC138\uC694.").addDropdown(
       (dropdown) => dropdown.addOption("gemini-2.5-flash", "Gemini 2.5 Flash (\uBE60\uB984, \uBC94\uC6A9)").addOption("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (\uC800\uBE44\uC6A9)").addOption("gemini-2.5-pro", "Gemini 2.5 Pro (\uACE0\uD488\uC9C8)").setValue(this.plugin.settings.geminiModel).onChange(async (value) => {
         this.plugin.settings.geminiModel = value;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u2699\uFE0F \uC790\uB3D9\uD654" });
-    new import_obsidian10.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uC790\uB3D9 \uBD84\uC11D").setDesc("_context/ \uD3F4\uB354 \uD30C\uC77C\uC774 \uCD94\uAC00/\uBCC0\uACBD\uB418\uBA74 Gemini\uB85C \uC790\uB3D9 \uC694\uC57D\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian11.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uC790\uB3D9 \uBD84\uC11D").setDesc("_context/ \uD3F4\uB354 \uD30C\uC77C\uC774 \uCD94\uAC00/\uBCC0\uACBD\uB418\uBA74 Gemini\uB85C \uC790\uB3D9 \uC694\uC57D\uD569\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoAnalyzeContext).onChange(async (value) => {
         this.plugin.settings.autoAnalyzeContext = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uD504\uB85C\uD37C\uD2F0 \uC790\uB3D9 \uC0DD\uC131").setDesc("\uBD84\uC11D \uACB0\uACFC\uB97C \uD30C\uC77C \uD504\uB85C\uD37C\uD2F0(frontmatter)\uC5D0 \uC790\uB3D9 \uAE30\uB85D\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian11.Setting(containerEl).setName("\uD504\uB85C\uD37C\uD2F0 \uC790\uB3D9 \uC0DD\uC131").setDesc("\uBD84\uC11D \uACB0\uACFC\uB97C \uD30C\uC77C \uD504\uB85C\uD37C\uD2F0(frontmatter)\uC5D0 \uC790\uB3D9 \uAE30\uB85D\uD569\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoFrontmatter).onChange(async (value) => {
         this.plugin.settings.autoFrontmatter = value;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u{1F4AC} \uCC44\uD305" });
-    new import_obsidian10.Setting(containerEl).setName("\uD788\uC2A4\uD1A0\uB9AC \uC720\uC9C0 \uD134 \uC218").setDesc("Gemini\uC5D0 \uC804\uB2EC\uD560 \uCD5C\uADFC \uB300\uD654 \uC30D(user+assistant)\uC758 \uAC1C\uC218. \uAE38\uC218\uB85D \uBB38\uB9E5 \uC720\uC9C0, \uD1A0\uD070 \uC0AC\uC6A9 \uC99D\uAC00.").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uD788\uC2A4\uD1A0\uB9AC \uC720\uC9C0 \uD134 \uC218").setDesc("Gemini\uC5D0 \uC804\uB2EC\uD560 \uCD5C\uADFC \uB300\uD654 \uC30D(user+assistant)\uC758 \uAC1C\uC218. \uAE38\uC218\uB85D \uBB38\uB9E5 \uC720\uC9C0, \uD1A0\uD070 \uC0AC\uC6A9 \uC99D\uAC00.").addText(
       (text) => text.setPlaceholder("20").setValue(String(this.plugin.settings.chatHistoryLimit)).onChange(async (value) => {
         const n = parseInt(value, 10);
         this.plugin.settings.chatHistoryLimit = Number.isFinite(n) && n > 0 ? n : 20;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8 \uC7AC\uC815\uC758").setDesc("\uBE44\uC6CC\uB450\uBA74 \uAE30\uBCF8 \uC218\uC8FC \uBD84\uC11D \uD504\uB86C\uD504\uD2B8\uB97C \uC0AC\uC6A9. \uD504\uB85C\uC81D\uD2B8\uBCC4 \uADDC\uBC94\uC744 \uAC15\uC81C\uD558\uB824\uBA74 \uC5EC\uAE30\uC5D0 \uAE30\uC785.").addTextArea((text) => {
+    new import_obsidian11.Setting(containerEl).setName("\uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8 \uC7AC\uC815\uC758").setDesc("\uBE44\uC6CC\uB450\uBA74 \uAE30\uBCF8 \uC218\uC8FC \uBD84\uC11D \uD504\uB86C\uD504\uD2B8\uB97C \uC0AC\uC6A9. \uD504\uB85C\uC81D\uD2B8\uBCC4 \uADDC\uBC94\uC744 \uAC15\uC81C\uD558\uB824\uBA74 \uC5EC\uAE30\uC5D0 \uAE30\uC785.").addTextArea((text) => {
       text.setValue(this.plugin.settings.systemPromptOverride).onChange(
         async (value) => {
           this.plugin.settings.systemPromptOverride = value;
@@ -2117,23 +2297,23 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
       text.inputEl.style.width = "100%";
     });
     containerEl.createEl("h3", { text: "\u{1F50D} RAG (\uC790\uB3D9 \uADFC\uAC70 \uAC80\uC0C9)" });
-    new import_obsidian10.Setting(containerEl).setName("RAG \uD65C\uC131\uD654").setDesc("\uCC44\uD305 \uC9C8\uBB38 \uC2DC \uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354\uC5D0\uC11C \uAD00\uB828 \uCCAD\uD06C\uB97C \uC790\uB3D9 \uAC80\uC0C9\uD574 \uD504\uB86C\uD504\uD2B8\uC5D0 \uC8FC\uC785\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian11.Setting(containerEl).setName("RAG \uD65C\uC131\uD654").setDesc("\uCC44\uD305 \uC9C8\uBB38 \uC2DC \uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354\uC5D0\uC11C \uAD00\uB828 \uCCAD\uD06C\uB97C \uC790\uB3D9 \uAC80\uC0C9\uD574 \uD504\uB86C\uD504\uD2B8\uC5D0 \uC8FC\uC785\uD569\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.ragEnabled).onChange(async (v) => {
         this.plugin.settings.ragEnabled = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uAC80\uC0C9 Top K").setDesc("\uC9C8\uBB38\uB2F9 \uAC00\uC838\uC62C \uAD00\uB828 \uCCAD\uD06C \uAC1C\uC218. \uAE30\uBCF8 5.").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uAC80\uC0C9 Top K").setDesc("\uC9C8\uBB38\uB2F9 \uAC00\uC838\uC62C \uAD00\uB828 \uCCAD\uD06C \uAC1C\uC218. \uAE30\uBCF8 5.").addText(
       (text) => text.setPlaceholder("5").setValue(String(this.plugin.settings.ragTopK)).onChange(async (value) => {
         const n = parseInt(value, 10);
         this.plugin.settings.ragTopK = Number.isFinite(n) && n > 0 ? n : 5;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uC784\uBCA0\uB529 \uBAA8\uB378").setDesc("\uD604\uC7AC Gemini text-embedding-004\uB9CC \uC9C0\uC6D0.").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uC784\uBCA0\uB529 \uBAA8\uB378").setDesc("\uD604\uC7AC Gemini text-embedding-004\uB9CC \uC9C0\uC6D0.").addText(
       (text) => text.setValue(this.plugin.settings.embeddingModel).setDisabled(true)
     );
-    new import_obsidian10.Setting(containerEl).setName("\uBCFC\uD2B8 \uC7AC\uC778\uB371\uC2F1").setDesc("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uC804\uCCB4\uB97C \uB2E4\uC2DC \uC784\uBCA0\uB529\uD569\uB2C8\uB2E4. \uD30C\uC77C \uC218\uC5D0 \uBE44\uB840\uD55C \uC2DC\uAC04 \uC18C\uC694.").addButton(
+    new import_obsidian11.Setting(containerEl).setName("\uBCFC\uD2B8 \uC7AC\uC778\uB371\uC2F1").setDesc("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uC804\uCCB4\uB97C \uB2E4\uC2DC \uC784\uBCA0\uB529\uD569\uB2C8\uB2E4. \uD30C\uC77C \uC218\uC5D0 \uBE44\uB840\uD55C \uC2DC\uAC04 \uC18C\uC694.").addButton(
       (button) => button.setButtonText("\uC7AC\uC778\uB371\uC2F1").onClick(async () => {
         var _a, _b;
         button.setDisabled(true);
@@ -2152,28 +2332,69 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
         }, 3e3);
       })
     );
+    containerEl.createEl("h3", { text: "\u{1F50C} MCP \uC11C\uBC84 (\uB3C4\uAD6C \uD1B5\uD569)" });
+    const mcpDesc = containerEl.createEl("p", {
+      cls: "setting-item-description"
+    });
+    mcpDesc.innerHTML = `
+			Model Context Protocol(HTTP \uC804\uC1A1)\uC744 \uC9C0\uC6D0\uD558\uB294 \uC678\uBD80 \uC11C\uBC84\uB97C \uB4F1\uB85D\uD558\uBA74
+			\uCC44\uD305 \uC911 \uB3C4\uAD6C \uD638\uCD9C\uC774 \uAC00\uB2A5\uD569\uB2C8\uB2E4. (\uC608: Slack \uB77C\uC6B0\uD305, \uCE98\uB9B0\uB354 \uC870\uD68C)
+			<br>\u2022 JSON \uBC30\uC5F4 \uD615\uC2DD\uC73C\uB85C \uC785\uB825: <code>[{"name":"slack","url":"https://...","enabled":true}]</code>
+			<br>\u2022 stdio \uC804\uC1A1 \uC11C\uBC84\uB294 \uBBF8\uC9C0\uC6D0 \u2014 HTTP/SSE \uC5D4\uB4DC\uD3EC\uC778\uD2B8\uB9CC \uC0AC\uC6A9\uD558\uC138\uC694.
+		`;
+    new import_obsidian11.Setting(containerEl).setName("MCP \uC11C\uBC84 \uBAA9\uB85D (JSON)").setDesc("\uAC01 \uD56D\uBAA9: name, url, enabled, authHeader(\uC120\uD0DD)").addTextArea((text) => {
+      text.setValue(JSON.stringify(this.plugin.settings.mcpServers, null, 2)).onChange(
+        async (value) => {
+          try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) {
+              this.plugin.settings.mcpServers = parsed;
+              await this.plugin.saveSettings();
+            }
+          } catch (e) {
+          }
+        }
+      );
+      text.inputEl.rows = 6;
+      text.inputEl.style.width = "100%";
+      text.inputEl.style.fontFamily = "var(--font-monospace)";
+    });
+    new import_obsidian11.Setting(containerEl).setName("MCP \uB3C4\uAD6C \uBAA9\uB85D \uD655\uC778").setDesc("\uB4F1\uB85D\uB41C \uC11C\uBC84\uC5D0\uC11C \uC0AC\uC6A9 \uAC00\uB2A5\uD55C \uB3C4\uAD6C\uB97C \uAC00\uC838\uC640 \uCF58\uC194\uC5D0 \uCD9C\uB825.").addButton(
+      (button) => button.setButtonText("\uB3C4\uAD6C \uC870\uD68C").onClick(async () => {
+        var _a, _b;
+        button.setButtonText("\uC870\uD68C \uC911...");
+        try {
+          const tools = await this.plugin.mcpRegistry.listAllTools();
+          console.log("[bid-intelligence MCP tools]", tools);
+          button.setButtonText(`\u2713 ${tools.length}\uAC1C \uB3C4\uAD6C`);
+        } catch (e) {
+          button.setButtonText(`\u274C ${(_b = (_a = e.message) == null ? void 0 : _a.slice(0, 20)) != null ? _b : "\uC624\uB958"}`);
+        }
+        setTimeout(() => button.setButtonText("\uB3C4\uAD6C \uC870\uD68C"), 3e3);
+      })
+    );
     containerEl.createEl("h3", { text: "\u{1F3AC} \uBA40\uD2F0\uBBF8\uB514\uC5B4" });
-    new import_obsidian10.Setting(containerEl).setName("YouTube \uC790\uB9C9 \uC5B8\uC5B4 \uC6B0\uC120\uC21C\uC704").setDesc("\uC27C\uD45C\uB85C \uAD6C\uBD84\uD55C \uC5B8\uC5B4 \uCF54\uB4DC. \uC608: ko,en \uC774\uBA74 \uD55C\uAD6D\uC5B4 \uC6B0\uC120, \uC5C6\uC73C\uBA74 \uC601\uC5B4.").addText(
+    new import_obsidian11.Setting(containerEl).setName("YouTube \uC790\uB9C9 \uC5B8\uC5B4 \uC6B0\uC120\uC21C\uC704").setDesc("\uC27C\uD45C\uB85C \uAD6C\uBD84\uD55C \uC5B8\uC5B4 \uCF54\uB4DC. \uC608: ko,en \uC774\uBA74 \uD55C\uAD6D\uC5B4 \uC6B0\uC120, \uC5C6\uC73C\uBA74 \uC601\uC5B4.").addText(
       (text) => text.setPlaceholder("ko,en").setValue(this.plugin.settings.youtubeCaptionLang).onChange(async (value) => {
         this.plugin.settings.youtubeCaptionLang = value.trim() || "ko,en";
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u{1F4CB} \uBE0C\uB9AC\uD551" });
-    new import_obsidian10.Setting(containerEl).setName("\uAD00\uC2EC \uD0A4\uC6CC\uB4DC").setDesc("\uBE0C\uB9AC\uD551 \uC2DC \uAC80\uC0C9\uD560 \uD0A4\uC6CC\uB4DC (\uC27C\uD45C \uAD6C\uBD84)").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uAD00\uC2EC \uD0A4\uC6CC\uB4DC").setDesc("\uBE0C\uB9AC\uD551 \uC2DC \uAC80\uC0C9\uD560 \uD0A4\uC6CC\uB4DC (\uC27C\uD45C \uAD6C\uBD84)").addText(
       (text) => text.setPlaceholder("\uAD50\uC721, ICT, ODA").setValue(this.plugin.settings.briefingKeywords).onChange(async (value) => {
         this.plugin.settings.briefingKeywords = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\uAD00\uC2EC \uBC1C\uC8FC\uCC98").setDesc("\uBAA8\uB2C8\uD130\uB9C1\uD560 \uBC1C\uC8FC\uCC98 (\uC27C\uD45C \uAD6C\uBD84)").addText(
+    new import_obsidian11.Setting(containerEl).setName("\uAD00\uC2EC \uBC1C\uC8FC\uCC98").setDesc("\uBAA8\uB2C8\uD130\uB9C1\uD560 \uBC1C\uC8FC\uCC98 (\uC27C\uD45C \uAD6C\uBD84)").addText(
       (text) => text.setPlaceholder("KOICA, \uB098\uB77C\uC7A5\uD130, NIPA").setValue(this.plugin.settings.briefingAgencies).onChange(async (value) => {
         this.plugin.settings.briefingAgencies = value;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u{1F527} \uC9C4\uB2E8" });
-    new import_obsidian10.Setting(containerEl).setName("API \uC5F0\uACB0 \uD14C\uC2A4\uD2B8").setDesc("Gemini API\uAC00 \uC815\uC0C1 \uC791\uB3D9\uD558\uB294\uC9C0 \uD655\uC778\uD569\uB2C8\uB2E4.").addButton(
+    new import_obsidian11.Setting(containerEl).setName("API \uC5F0\uACB0 \uD14C\uC2A4\uD2B8").setDesc("Gemini API\uAC00 \uC815\uC0C1 \uC791\uB3D9\uD558\uB294\uC9C0 \uD655\uC778\uD569\uB2C8\uB2E4.").addButton(
       (button) => button.setButtonText("\uD14C\uC2A4\uD2B8").onClick(async () => {
         button.setButtonText("\uD14C\uC2A4\uD2B8 \uC911...");
         button.setDisabled(true);
@@ -2205,7 +2426,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian10.PluginSettingTab
 init_gemini();
 
 // src/utils/embeddings.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 var BASE_URL2 = "https://generativelanguage.googleapis.com/v1beta/models";
 var EmbeddingsClient = class {
   constructor(apiKey, model = "text-embedding-004") {
@@ -2222,7 +2443,7 @@ var EmbeddingsClient = class {
       content: { parts: [{ text }] },
       taskType: task === "query" ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT"
     };
-    const res = await (0, import_obsidian11.requestUrl)({
+    const res = await (0, import_obsidian12.requestUrl)({
       url,
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2253,7 +2474,7 @@ var EmbeddingsClient = class {
           taskType
         }))
       };
-      const res = await (0, import_obsidian11.requestUrl)({
+      const res = await (0, import_obsidian12.requestUrl)({
         url,
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2489,20 +2710,163 @@ var VectorStore = class {
   }
 };
 
+// src/utils/mcpClient.ts
+var import_obsidian13 = require("obsidian");
+var McpClient = class {
+  constructor(config) {
+    this.nextId = 1;
+    this.initialized = false;
+    this.config = config;
+  }
+  get name() {
+    return this.config.name;
+  }
+  async initialize() {
+    if (this.initialized)
+      return;
+    await this.call("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: {
+        name: "obsidian-bid-intelligence",
+        version: "1.1.0"
+      }
+    });
+    this.initialized = true;
+  }
+  async listTools() {
+    var _a;
+    await this.initialize();
+    const result = await this.call("tools/list", {});
+    const tools = (_a = result == null ? void 0 : result.tools) != null ? _a : [];
+    return tools.map((t) => {
+      var _a2;
+      return {
+        name: t.name,
+        description: t.description,
+        inputSchema: (_a2 = t.inputSchema) != null ? _a2 : { type: "object" },
+        _server: this.config.name
+      };
+    });
+  }
+  async callTool(name, args) {
+    var _a;
+    await this.initialize();
+    const result = await this.call("tools/call", {
+      name,
+      arguments: args
+    });
+    return {
+      content: (_a = result == null ? void 0 : result.content) != null ? _a : [],
+      isError: result == null ? void 0 : result.isError
+    };
+  }
+  async call(method, params) {
+    var _a, _b;
+    const req = {
+      jsonrpc: "2.0",
+      id: this.nextId++,
+      method,
+      params
+    };
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream"
+    };
+    if (this.config.authHeader) {
+      headers.Authorization = this.config.authHeader;
+    }
+    const res = await (0, import_obsidian13.requestUrl)({
+      url: this.config.url,
+      method: "POST",
+      headers,
+      body: JSON.stringify(req)
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`MCP ${method} HTTP ${res.status}`);
+    }
+    let body;
+    if ((_b = (_a = res.headers) == null ? void 0 : _a["content-type"]) == null ? void 0 : _b.includes("text/event-stream")) {
+      body = parseSseJsonRpc(res.text);
+    } else {
+      body = res.json;
+    }
+    if (body.error) {
+      throw new Error(`MCP ${method}: ${body.error.message}`);
+    }
+    return body.result;
+  }
+};
+function parseSseJsonRpc(sse) {
+  const events = sse.split("\n\n");
+  for (const evt of events) {
+    const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
+    if (!dataLine)
+      continue;
+    const payload = dataLine.slice(5).trim();
+    if (!payload)
+      continue;
+    try {
+      const json = JSON.parse(payload);
+      if (json.jsonrpc === "2.0" && typeof json.id !== "undefined") {
+        return json;
+      }
+    } catch (e) {
+    }
+  }
+  throw new Error("SSE \uC751\uB2F5\uC5D0\uC11C JSON-RPC \uACB0\uACFC\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+}
+var McpRegistry = class {
+  constructor() {
+    this.clients = /* @__PURE__ */ new Map();
+  }
+  setServers(servers) {
+    this.clients.clear();
+    for (const s of servers) {
+      if (s.enabled && s.url) {
+        this.clients.set(s.name, new McpClient(s));
+      }
+    }
+  }
+  async listAllTools() {
+    const all = [];
+    for (const [, client] of this.clients) {
+      try {
+        const tools = await client.listTools();
+        all.push(...tools);
+      } catch (e) {
+        console.warn(`MCP ${client.name} listTools \uC2E4\uD328:`, e);
+      }
+    }
+    return all;
+  }
+  async callTool(serverName, toolName, args) {
+    const client = this.clients.get(serverName);
+    if (!client)
+      throw new Error(`MCP \uC11C\uBC84 "${serverName}" \uBBF8\uB4F1\uB85D`);
+    return client.callTool(toolName, args);
+  }
+  size() {
+    return this.clients.size;
+  }
+};
+
 // src/main.ts
 init_frontmatter();
-var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
+var BidIntelligencePlugin = class extends import_obsidian14.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
     this.gemini = null;
     this.embeddings = null;
     this.vectorStore = null;
+    this.mcpRegistry = new McpRegistry();
   }
   async onload() {
     await this.loadSettings();
     this.initGemini();
     this.initRag();
+    this.initMcp();
     this.addSettingTab(new BidIntelligenceSettingTab(this.app, this));
     this.registerView(VIEW_TYPE_CONTEXT, (leaf) => new ContextManagerView(leaf, this));
     this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf, this));
@@ -2555,7 +2919,7 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
     if (this.settings.autoAnalyzeContext) {
       this.registerEvent(
         this.app.vault.on("create", (file) => {
-          if (file instanceof import_obsidian12.TFile && this.shouldAutoAnalyze(file)) {
+          if (file instanceof import_obsidian14.TFile && this.shouldAutoAnalyze(file)) {
             setTimeout(() => this.autoAnalyzeFile(file), 2e3);
           }
         })
@@ -2563,14 +2927,14 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
     }
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian12.TFile && this.shouldIndex(file)) {
+        if (file instanceof import_obsidian14.TFile && this.shouldIndex(file)) {
           setTimeout(() => this.indexFileQuiet(file), 2e3);
         }
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian12.TFile && this.vectorStore) {
+        if (file instanceof import_obsidian14.TFile && this.vectorStore) {
           this.vectorStore.removeFile(file.path);
           void this.vectorStore.save();
         }
@@ -2580,7 +2944,7 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
       this.app.vault.on("rename", (file, oldPath) => {
         if (this.vectorStore) {
           this.vectorStore.removeFile(oldPath);
-          if (file instanceof import_obsidian12.TFile && this.shouldIndex(file)) {
+          if (file instanceof import_obsidian14.TFile && this.shouldIndex(file)) {
             setTimeout(() => this.indexFileQuiet(file), 500);
           }
         }
@@ -2603,6 +2967,7 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
     await this.saveData(this.settings);
     this.initGemini();
     this.initRag();
+    this.initMcp();
   }
   initGemini() {
     if (this.settings.geminiApiKey) {
@@ -2613,6 +2978,10 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
     } else {
       this.gemini = null;
     }
+  }
+  initMcp() {
+    var _a;
+    this.mcpRegistry.setServers((_a = this.settings.mcpServers) != null ? _a : []);
   }
   initRag() {
     if (!this.settings.geminiApiKey) {
@@ -2636,17 +3005,17 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
    */
   async indexVault(onProgress) {
     if (!this.embeddings || !this.vectorStore) {
-      new import_obsidian12.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian14.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       throw new Error("no-api-key");
     }
     const folder = this.settings.contextFolder;
-    new import_obsidian12.Notice(`\u{1F50D} ${folder}/ \uC778\uB371\uC2F1 \uC2DC\uC791...`);
+    new import_obsidian14.Notice(`\u{1F50D} ${folder}/ \uC778\uB371\uC2F1 \uC2DC\uC791...`);
     const result = await this.vectorStore.reindex(
       folder,
       this.embeddings,
       onProgress
     );
-    new import_obsidian12.Notice(`\u2705 \uC778\uB371\uC2F1 \uC644\uB8CC: ${result.files}\uAC1C \uD30C\uC77C, ${result.chunks}\uAC1C \uCCAD\uD06C`);
+    new import_obsidian14.Notice(`\u2705 \uC778\uB371\uC2F1 \uC644\uB8CC: ${result.files}\uAC1C \uD30C\uC77C, ${result.chunks}\uAC1C \uCCAD\uD06C`);
     return result;
   }
   /**
@@ -2654,19 +3023,19 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
    */
   async analyzeCurrentFile() {
     if (!this.gemini) {
-      new import_obsidian12.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian14.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const file = this.app.workspace.getActiveFile();
     if (!file) {
-      new import_obsidian12.Notice("\uC5F4\uB9B0 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian14.Notice("\uC5F4\uB9B0 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     if (file.extension !== "md") {
-      new import_obsidian12.Notice("\uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uB9CC \uBD84\uC11D\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian14.Notice("\uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uB9CC \uBD84\uC11D\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
       return;
     }
-    new import_obsidian12.Notice(`\u{1F50D} ${file.basename} \uBD84\uC11D \uC911...`);
+    new import_obsidian14.Notice(`\u{1F50D} ${file.basename} \uBD84\uC11D \uC911...`);
     try {
       const content = await this.app.vault.read(file);
       const existing = getFrontmatter(file, this.app.metadataCache);
@@ -2676,9 +3045,9 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
         existing
       );
       await updateFrontmatter(file, this.app.vault, props);
-      new import_obsidian12.Notice(`\u2705 ${file.basename} \uD504\uB85C\uD37C\uD2F0 \uC0DD\uC131 \uC644\uB8CC`);
+      new import_obsidian14.Notice(`\u2705 ${file.basename} \uD504\uB85C\uD37C\uD2F0 \uC0DD\uC131 \uC644\uB8CC`);
     } catch (e) {
-      new import_obsidian12.Notice(`\u274C \uBD84\uC11D \uC2E4\uD328: ${e.message}`);
+      new import_obsidian14.Notice(`\u274C \uBD84\uC11D \uC2E4\uD328: ${e.message}`);
     }
   }
   /**
@@ -2686,17 +3055,17 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
    */
   async analyzeAllContext() {
     if (!this.gemini) {
-      new import_obsidian12.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian14.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const files = this.app.vault.getFiles().filter(
       (f) => f.path.startsWith(this.settings.contextFolder + "/") && f.extension === "md"
     );
     if (files.length === 0) {
-      new import_obsidian12.Notice(`${this.settings.contextFolder}/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      new import_obsidian14.Notice(`${this.settings.contextFolder}/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
       return;
     }
-    new import_obsidian12.Notice(`\u{1F50D} ${files.length}\uAC1C \uD30C\uC77C \uBD84\uC11D \uC2DC\uC791...`);
+    new import_obsidian14.Notice(`\u{1F50D} ${files.length}\uAC1C \uD30C\uC77C \uBD84\uC11D \uC2DC\uC791...`);
     let done = 0;
     let failed = 0;
     for (const file of files) {
@@ -2722,7 +3091,7 @@ var BidIntelligencePlugin = class extends import_obsidian12.Plugin {
         failed++;
       }
     }
-    new import_obsidian12.Notice(`\u2705 \uBD84\uC11D \uC644\uB8CC: ${done}\uAC1C \uC131\uACF5, ${failed}\uAC1C \uC2E4\uD328`);
+    new import_obsidian14.Notice(`\u2705 \uBD84\uC11D \uC644\uB8CC: ${done}\uAC1C \uC131\uACF5, ${failed}\uAC1C \uC2E4\uD328`);
   }
   /**
    * 파일이 자동 분석 대상인지 확인
