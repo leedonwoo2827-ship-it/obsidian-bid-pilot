@@ -4,30 +4,39 @@ import {
 	AnalysisReport,
 	ContextStats,
 	FITNESS_ICONS,
-	CONTEXT_FOLDER,
-	ANALYSIS_FOLDER,
+	DEFAULT_CONTEXT_FOLDER,
+	DEFAULT_ANALYSIS_FOLDER,
 	CONTEXT_CATEGORIES,
 } from "./constants";
 
 /**
- * _context/ 폴더 통계 수집
+ * 컨텍스트 폴더 통계 수집
+ * @param vault Obsidian Vault
+ * @param contextFolder 볼트 루트 기준 상대 경로 (예: "_context", "bid-pilot/_context")
  */
-export function getContextStats(vault: Vault): ContextStats {
+export function getContextStats(
+	vault: Vault,
+	contextFolder: string = DEFAULT_CONTEXT_FOLDER
+): ContextStats {
 	const stats: ContextStats = {
 		totalFiles: 0,
 		categories: {},
 		lastModified: null,
 	};
 
+	const prefix = contextFolder + "/";
+	const depth = contextFolder.split("/").length; // 몇 단계 하위에서 카테고리가 시작되는지
+
 	const allFiles = vault.getFiles();
 	for (const file of allFiles) {
-		if (!file.path.startsWith(CONTEXT_FOLDER + "/")) continue;
+		if (!file.path.startsWith(prefix)) continue;
 		stats.totalFiles++;
 
-		// Categorize by subfolder
+		// Categorize by first subfolder under contextFolder
 		const parts = file.path.split("/");
-		if (parts.length >= 3) {
-			const cat = parts[1];
+		// parts: [contextFolder 구성 조각들..., category, ...filename]
+		if (parts.length >= depth + 2) {
+			const cat = parts[depth];
 			stats.categories[cat] = (stats.categories[cat] || 0) + 1;
 		} else {
 			stats.categories["(루트)"] = (stats.categories["(루트)"] || 0) + 1;
@@ -44,14 +53,18 @@ export function getContextStats(vault: Vault): ContextStats {
 }
 
 /**
- * _analysis/ 폴더에서 분석 보고서 목록 추출
+ * 분석 결과 폴더에서 보고서 목록 추출
  */
-export function getAnalysisReports(vault: Vault): AnalysisReport[] {
+export function getAnalysisReports(
+	vault: Vault,
+	analysisFolder: string = DEFAULT_ANALYSIS_FOLDER
+): AnalysisReport[] {
 	const reports: AnalysisReport[] = [];
+	const prefix = analysisFolder + "/";
 
 	const allFiles = vault.getFiles();
 	for (const file of allFiles) {
-		if (!file.path.startsWith(ANALYSIS_FOLDER + "/")) continue;
+		if (!file.path.startsWith(prefix)) continue;
 		if (file.extension !== "md") continue;
 
 		const name = file.basename;

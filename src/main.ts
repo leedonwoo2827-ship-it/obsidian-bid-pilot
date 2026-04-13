@@ -3,8 +3,6 @@ import {
 	VIEW_TYPE_CONTEXT,
 	VIEW_TYPE_BRIEFING,
 	VIEW_TYPE_REPORT,
-	CONTEXT_FOLDER,
-	ANALYSIS_FOLDER,
 } from "./utils/constants";
 import { ContextManagerView } from "./views/ContextManagerView";
 import { BriefingDashboardView } from "./views/BriefingDashboardView";
@@ -28,28 +26,16 @@ export default class BidIntelligencePlugin extends Plugin {
 		// Settings tab
 		this.addSettingTab(new BidIntelligenceSettingTab(this.app, this));
 
-		// Register views — pass plugin reference for Gemini access
+		// Register views — pass plugin reference so views can read settings & Gemini
 		this.registerView(VIEW_TYPE_CONTEXT, (leaf) => new ContextManagerView(leaf, this));
-		this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf));
-		this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf));
+		this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf, this));
+		this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf, this));
 
 		// Register commands
 		this.addCommand({
 			id: "open-context-manager",
 			name: "컨텍스트 매니저 열기",
 			callback: () => this.activateView(VIEW_TYPE_CONTEXT, "left"),
-		});
-
-		this.addCommand({
-			id: "open-briefing-dashboard",
-			name: "브리핑 대시보드 열기",
-			callback: () => this.activateView(VIEW_TYPE_BRIEFING, "right"),
-		});
-
-		this.addCommand({
-			id: "open-analysis-report",
-			name: "분석 리포트 뷰어 열기",
-			callback: () => this.activateView(VIEW_TYPE_REPORT, "right"),
 		});
 
 		this.addCommand({
@@ -67,10 +53,6 @@ export default class BidIntelligencePlugin extends Plugin {
 		// Ribbon icons
 		this.addRibbonIcon("database", "컨텍스트 매니저", () => {
 			this.activateView(VIEW_TYPE_CONTEXT, "left");
-		});
-
-		this.addRibbonIcon("bar-chart-3", "브리핑 대시보드", () => {
-			this.activateView(VIEW_TYPE_BRIEFING, "right");
 		});
 
 		// Auto-analyze context files on create/modify
@@ -164,11 +146,11 @@ export default class BidIntelligencePlugin extends Plugin {
 		}
 
 		const files = this.app.vault.getFiles().filter(
-			(f) => f.path.startsWith(CONTEXT_FOLDER + "/") && f.extension === "md"
+			(f) => f.path.startsWith(this.settings.contextFolder + "/") && f.extension === "md"
 		);
 
 		if (files.length === 0) {
-			new Notice("_context/ 폴더에 마크다운 파일이 없습니다.");
+			new Notice(`${this.settings.contextFolder}/ 폴더에 마크다운 파일이 없습니다.`);
 			return;
 		}
 
@@ -214,8 +196,27 @@ export default class BidIntelligencePlugin extends Plugin {
 	 */
 	private shouldAutoAnalyze(file: TFile): boolean {
 		if (file.extension !== "md") return false;
-		return file.path.startsWith(CONTEXT_FOLDER + "/") ||
-			file.path.startsWith(ANALYSIS_FOLDER + "/");
+		return file.path.startsWith(this.settings.contextFolder + "/") ||
+			file.path.startsWith(this.settings.analysisFolder + "/");
+	}
+
+	/**
+	 * 열려 있는 모든 플러그인 뷰를 다시 그린다 (설정에서 경로 바꾼 뒤 호출용).
+	 */
+	refreshAllViews(): void {
+		for (const type of [VIEW_TYPE_CONTEXT, VIEW_TYPE_BRIEFING, VIEW_TYPE_REPORT]) {
+			const leaves = this.app.workspace.getLeavesOfType(type);
+			for (const leaf of leaves) {
+				const view = leaf.view as any;
+				if (view && typeof view.render === "function") {
+					try {
+						view.render();
+					} catch {
+						// swallow render errors — next vault event will try again
+					}
+				}
+			}
+		}
 	}
 
 	/**

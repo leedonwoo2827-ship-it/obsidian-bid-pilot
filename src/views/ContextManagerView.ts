@@ -1,7 +1,6 @@
 import { ItemView, WorkspaceLeaf, TFile, TFolder, Notice } from "obsidian";
 import {
 	VIEW_TYPE_CONTEXT,
-	CONTEXT_FOLDER,
 	CONTEXT_CATEGORIES,
 } from "../utils/constants";
 import { getContextStats, formatDate } from "../utils/parser";
@@ -46,12 +45,13 @@ export class ContextManagerView extends ItemView {
 		// cleanup handled by Obsidian
 	}
 
-	private render(): void {
+	render(): void {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("bi-context-manager");
 
-		const stats = getContextStats(this.app.vault);
+		const contextFolder = this.plugin.settings.contextFolder;
+		const stats = getContextStats(this.app.vault, contextFolder);
 
 		// Header
 		const header = container.createDiv({ cls: "bi-cm-header" });
@@ -109,7 +109,7 @@ export class ContextManagerView extends ItemView {
 
 			if (this.plugin.gemini) {
 				const mdFiles = this.app.vault.getFiles().filter(
-					(f) => f.path.startsWith(CONTEXT_FOLDER + "/") && f.extension === "md"
+					(f) => f.path.startsWith(contextFolder + "/") && f.extension === "md"
 				);
 				const analyzed = mdFiles.filter((f) => {
 					const fm = getFrontmatter(f, this.app.metadataCache);
@@ -156,7 +156,7 @@ export class ContextManagerView extends ItemView {
 			if (count > 0) {
 				item.addClass("bi-cm-cat-has-files");
 				item.addEventListener("click", () => {
-					this.openFolder(`${CONTEXT_FOLDER}/${key}`);
+					this.openFolder(`${contextFolder}/${key}`);
 				});
 			}
 		}
@@ -171,9 +171,9 @@ export class ContextManagerView extends ItemView {
 			item.createEl("span", { cls: "bi-cm-cat-label", text: key });
 			item.addEventListener("click", () => {
 				if (key === "(루트)") {
-					this.openFolder(CONTEXT_FOLDER);
+					this.openFolder(contextFolder);
 				} else {
-					this.openFolder(`${CONTEXT_FOLDER}/${key}`);
+					this.openFolder(`${contextFolder}/${key}`);
 				}
 			});
 		}
@@ -185,7 +185,7 @@ export class ContextManagerView extends ItemView {
 
 			const fileList = fileSection.createDiv({ cls: "bi-cm-file-list" });
 			const allFiles = this.app.vault.getFiles()
-				.filter((f) => f.path.startsWith(CONTEXT_FOLDER + "/"))
+				.filter((f) => f.path.startsWith(contextFolder + "/"))
 				.sort((a, b) => b.stat.mtime - a.stat.mtime);
 
 			for (const file of allFiles.slice(0, 30)) {
@@ -195,7 +195,7 @@ export class ContextManagerView extends ItemView {
 
 				const link = item.createEl("a", {
 					cls: "bi-cm-file-link",
-					text: file.path.replace(CONTEXT_FOLDER + "/", ""),
+					text: file.path.replace(contextFolder + "/", ""),
 				});
 				link.addEventListener("click", (e) => {
 					e.preventDefault();

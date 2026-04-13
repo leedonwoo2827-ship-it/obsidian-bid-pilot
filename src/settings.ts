@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type BidIntelligencePlugin from "./main";
+import { DEFAULT_CONTEXT_FOLDER, DEFAULT_ANALYSIS_FOLDER } from "./utils/constants";
 
 export interface BidIntelligenceSettings {
 	geminiApiKey: string;
@@ -9,6 +10,8 @@ export interface BidIntelligenceSettings {
 	briefingKeywords: string;
 	briefingAgencies: string;
 	language: string;
+	contextFolder: string;
+	analysisFolder: string;
 }
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
@@ -19,7 +22,19 @@ export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	briefingKeywords: "교육, ICT, ODA, 디지털, 컨설팅",
 	briefingAgencies: "KOICA, 나라장터, NIPA, NIA",
 	language: "ko",
+	contextFolder: DEFAULT_CONTEXT_FOLDER,
+	analysisFolder: DEFAULT_ANALYSIS_FOLDER,
 };
+
+/** 경로 문자열 정규화 (선후 슬래시 제거, 백슬래시→슬래시) */
+export function normalizeFolderPath(input: string, fallback: string): string {
+	if (!input) return fallback;
+	const cleaned = input
+		.replace(/\\/g, "/")
+		.replace(/^\/+|\/+$/g, "")
+		.trim();
+	return cleaned || fallback;
+}
 
 export class BidIntelligenceSettingTab extends PluginSettingTab {
 	plugin: BidIntelligencePlugin;
@@ -34,6 +49,63 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		containerEl.createEl("h2", { text: "Bid Intelligence 설정" });
+
+		// ── 프로젝트 경로 ──
+		containerEl.createEl("h3", { text: "📁 프로젝트 경로" });
+
+		const pathDesc = containerEl.createEl("p", {
+			cls: "setting-item-description",
+		});
+		pathDesc.style.marginBottom = "12px";
+		pathDesc.innerHTML = `
+			볼트 루트 기준 상대 경로입니다.
+			<br>• 기본: <code>_context</code> / <code>_analysis</code>
+			<br>• 하위 프로젝트 사용 시: <code>bid-pilot/_context</code> / <code>bid-pilot/_analysis</code>
+			<br>• 변경 후 사이드바가 즉시 갱신되지 않으면 아래 "다시 그리기" 버튼을 누르세요.
+		`;
+
+		new Setting(containerEl)
+			.setName("컨텍스트 폴더 경로")
+			.setDesc("회사 자료가 들어 있는 폴더")
+			.addText((text) =>
+				text
+					.setPlaceholder("_context 또는 bid-pilot/_context")
+					.setValue(this.plugin.settings.contextFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.contextFolder = normalizeFolderPath(
+							value,
+							DEFAULT_CONTEXT_FOLDER
+						);
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("분석 결과 폴더 경로")
+			.setDesc("/bid-analyze, /brief 결과가 저장되는 폴더")
+			.addText((text) =>
+				text
+					.setPlaceholder("_analysis 또는 bid-pilot/_analysis")
+					.setValue(this.plugin.settings.analysisFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisFolder = normalizeFolderPath(
+							value,
+							DEFAULT_ANALYSIS_FOLDER
+						);
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("뷰 즉시 갱신")
+			.setDesc("경로 변경 후 사이드바/대시보드를 지금 다시 그립니다.")
+			.addButton((button) =>
+				button.setButtonText("다시 그리기").onClick(() => {
+					this.plugin.refreshAllViews();
+					button.setButtonText("✓ 완료");
+					setTimeout(() => button.setButtonText("다시 그리기"), 1500);
+				})
+			);
 
 		// ── AI 설정 ──
 		containerEl.createEl("h3", { text: "🤖 AI 설정" });

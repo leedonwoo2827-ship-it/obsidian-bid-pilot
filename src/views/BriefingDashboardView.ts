@@ -1,7 +1,6 @@
 import { ItemView, WorkspaceLeaf, TFile } from "obsidian";
 import {
 	VIEW_TYPE_BRIEFING,
-	ANALYSIS_FOLDER,
 	BriefEntry,
 } from "../utils/constants";
 import {
@@ -9,12 +8,15 @@ import {
 	extractSection,
 	formatDate,
 } from "../utils/parser";
+import type BidIntelligencePlugin from "../main";
 
 export class BriefingDashboardView extends ItemView {
 	private currentFile: TFile | null = null;
+	private plugin: BidIntelligencePlugin;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(leaf: WorkspaceLeaf, plugin: BidIntelligencePlugin) {
 		super(leaf);
+		this.plugin = plugin;
 	}
 
 	getViewType(): string {
@@ -34,7 +36,8 @@ export class BriefingDashboardView extends ItemView {
 
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
-				if (file instanceof TFile && file.path.startsWith(ANALYSIS_FOLDER + "/brief-")) {
+				const analysisFolder = this.plugin.settings.analysisFolder;
+				if (file instanceof TFile && file.path.startsWith(analysisFolder + "/brief-")) {
 					this.render();
 				}
 			})
@@ -52,14 +55,16 @@ export class BriefingDashboardView extends ItemView {
 		// cleanup
 	}
 
-	private async render(): Promise<void> {
+	async render(): Promise<void> {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("bi-briefing");
 
+		const analysisFolder = this.plugin.settings.analysisFolder;
+
 		// Find latest brief file
 		const briefs = this.app.vault.getFiles()
-			.filter((f) => f.path.startsWith(ANALYSIS_FOLDER + "/") && f.basename.startsWith("brief-"))
+			.filter((f) => f.path.startsWith(analysisFolder + "/") && f.basename.startsWith("brief-"))
 			.sort((a, b) => b.stat.mtime - a.stat.mtime);
 
 		// Header

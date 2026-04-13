@@ -1,16 +1,18 @@
 import { ItemView, WorkspaceLeaf, TFile, MarkdownRenderer } from "obsidian";
 import {
 	VIEW_TYPE_REPORT,
-	ANALYSIS_FOLDER,
 	AnalysisReport,
 } from "../utils/constants";
 import { getAnalysisReports, reportTypeLabel, formatDate } from "../utils/parser";
+import type BidIntelligencePlugin from "../main";
 
 export class AnalysisReportView extends ItemView {
 	private selectedType: string = "all";
+	private plugin: BidIntelligencePlugin;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(leaf: WorkspaceLeaf, plugin: BidIntelligencePlugin) {
 		super(leaf);
+		this.plugin = plugin;
 	}
 
 	getViewType(): string {
@@ -30,14 +32,16 @@ export class AnalysisReportView extends ItemView {
 
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
-				if (file instanceof TFile && file.path.startsWith(ANALYSIS_FOLDER + "/")) {
+				const analysisFolder = this.plugin.settings.analysisFolder;
+				if (file instanceof TFile && file.path.startsWith(analysisFolder + "/")) {
 					this.render();
 				}
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on("delete", (file) => {
-				if (file instanceof TFile && file.path.startsWith(ANALYSIS_FOLDER + "/")) {
+				const analysisFolder = this.plugin.settings.analysisFolder;
+				if (file instanceof TFile && file.path.startsWith(analysisFolder + "/")) {
 					this.render();
 				}
 			})
@@ -48,12 +52,12 @@ export class AnalysisReportView extends ItemView {
 		// cleanup
 	}
 
-	private async render(): Promise<void> {
+	async render(): Promise<void> {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("bi-report");
 
-		const reports = getAnalysisReports(this.app.vault);
+		const reports = getAnalysisReports(this.app.vault, this.plugin.settings.analysisFolder);
 
 		// Header
 		const header = container.createDiv({ cls: "bi-report-header" });

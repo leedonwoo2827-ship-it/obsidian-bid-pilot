@@ -5,9 +5,9 @@ export const VIEW_TYPE_CONTEXT = "bid-context-manager";
 export const VIEW_TYPE_BRIEFING = "bid-briefing-dashboard";
 export const VIEW_TYPE_REPORT = "bid-analysis-report";
 
-// Folder paths
-export const CONTEXT_FOLDER = "_context";
-export const ANALYSIS_FOLDER = "_analysis";
+// Default folder paths (actual values come from settings at runtime)
+export const DEFAULT_CONTEXT_FOLDER = "_context";
+export const DEFAULT_ANALYSIS_FOLDER = "_analysis";
 
 // Context subfolder categories
 export const CONTEXT_CATEGORIES: Record<string, string> = {

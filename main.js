@@ -308,8 +308,8 @@ var import_obsidian6 = require("obsidian");
 var VIEW_TYPE_CONTEXT = "bid-context-manager";
 var VIEW_TYPE_BRIEFING = "bid-briefing-dashboard";
 var VIEW_TYPE_REPORT = "bid-analysis-report";
-var CONTEXT_FOLDER = "_context";
-var ANALYSIS_FOLDER = "_analysis";
+var DEFAULT_CONTEXT_FOLDER = "_context";
+var DEFAULT_ANALYSIS_FOLDER = "_analysis";
 var CONTEXT_CATEGORIES = {
   company: "\uD68C\uC0AC \uC18C\uAC1C/IR\uBCF4\uACE0\uC11C",
   proposals: "\uACFC\uAC70 \uC81C\uC548\uC11C",
@@ -322,20 +322,22 @@ var CONTEXT_CATEGORIES = {
 var import_obsidian = require("obsidian");
 
 // src/utils/parser.ts
-function getContextStats(vault) {
+function getContextStats(vault, contextFolder = DEFAULT_CONTEXT_FOLDER) {
   const stats = {
     totalFiles: 0,
     categories: {},
     lastModified: null
   };
+  const prefix = contextFolder + "/";
+  const depth = contextFolder.split("/").length;
   const allFiles = vault.getFiles();
   for (const file of allFiles) {
-    if (!file.path.startsWith(CONTEXT_FOLDER + "/"))
+    if (!file.path.startsWith(prefix))
       continue;
     stats.totalFiles++;
     const parts = file.path.split("/");
-    if (parts.length >= 3) {
-      const cat = parts[1];
+    if (parts.length >= depth + 2) {
+      const cat = parts[depth];
       stats.categories[cat] = (stats.categories[cat] || 0) + 1;
     } else {
       stats.categories["(\uB8E8\uD2B8)"] = (stats.categories["(\uB8E8\uD2B8)"] || 0) + 1;
@@ -347,11 +349,12 @@ function getContextStats(vault) {
   }
   return stats;
 }
-function getAnalysisReports(vault) {
+function getAnalysisReports(vault, analysisFolder = DEFAULT_ANALYSIS_FOLDER) {
   const reports = [];
+  const prefix = analysisFolder + "/";
   const allFiles = vault.getFiles();
   for (const file of allFiles) {
-    if (!file.path.startsWith(ANALYSIS_FOLDER + "/"))
+    if (!file.path.startsWith(prefix))
       continue;
     if (file.extension !== "md")
       continue;
@@ -494,7 +497,8 @@ var ContextManagerView = class extends import_obsidian.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("bi-context-manager");
-    const stats = getContextStats(this.app.vault);
+    const contextFolder = this.plugin.settings.contextFolder;
+    const stats = getContextStats(this.app.vault, contextFolder);
     const header = container.createDiv({ cls: "bi-cm-header" });
     header.createEl("h4", { text: "\u{1F4C2} \uD68C\uC0AC \uCEE8\uD14D\uC2A4\uD2B8" });
     header.createEl("span", {
@@ -538,7 +542,7 @@ var ContextManagerView = class extends import_obsidian.ItemView {
       aiSection.createEl("span", { cls: `bi-cm-ai-status ${aiStatusCls}`, text: aiStatus });
       if (this.plugin.gemini) {
         const mdFiles = this.app.vault.getFiles().filter(
-          (f) => f.path.startsWith(CONTEXT_FOLDER + "/") && f.extension === "md"
+          (f) => f.path.startsWith(contextFolder + "/") && f.extension === "md"
         );
         const analyzed = mdFiles.filter((f) => {
           const fm = getFrontmatter(f, this.app.metadataCache);
@@ -579,7 +583,7 @@ var ContextManagerView = class extends import_obsidian.ItemView {
       if (count > 0) {
         item.addClass("bi-cm-cat-has-files");
         item.addEventListener("click", () => {
-          this.openFolder(`${CONTEXT_FOLDER}/${key}`);
+          this.openFolder(`${contextFolder}/${key}`);
         });
       }
     }
@@ -594,9 +598,9 @@ var ContextManagerView = class extends import_obsidian.ItemView {
       item.createEl("span", { cls: "bi-cm-cat-label", text: key });
       item.addEventListener("click", () => {
         if (key === "(\uB8E8\uD2B8)") {
-          this.openFolder(CONTEXT_FOLDER);
+          this.openFolder(contextFolder);
         } else {
-          this.openFolder(`${CONTEXT_FOLDER}/${key}`);
+          this.openFolder(`${contextFolder}/${key}`);
         }
       });
     }
@@ -604,14 +608,14 @@ var ContextManagerView = class extends import_obsidian.ItemView {
       const fileSection = container.createDiv({ cls: "bi-cm-files" });
       fileSection.createEl("h5", { text: "\uD30C\uC77C \uBAA9\uB85D" });
       const fileList = fileSection.createDiv({ cls: "bi-cm-file-list" });
-      const allFiles = this.app.vault.getFiles().filter((f) => f.path.startsWith(CONTEXT_FOLDER + "/")).sort((a, b) => b.stat.mtime - a.stat.mtime);
+      const allFiles = this.app.vault.getFiles().filter((f) => f.path.startsWith(contextFolder + "/")).sort((a, b) => b.stat.mtime - a.stat.mtime);
       for (const file of allFiles.slice(0, 30)) {
         const item = fileList.createDiv({ cls: "bi-cm-file-item" });
         const icon = this.getFileIcon(file.extension);
         item.createEl("span", { cls: "bi-cm-file-icon", text: icon });
         const link = item.createEl("a", {
           cls: "bi-cm-file-link",
-          text: file.path.replace(CONTEXT_FOLDER + "/", "")
+          text: file.path.replace(contextFolder + "/", "")
         });
         link.addEventListener("click", (e) => {
           e.preventDefault();
@@ -707,9 +711,10 @@ var ContextManagerView = class extends import_obsidian.ItemView {
 // src/views/BriefingDashboardView.ts
 var import_obsidian2 = require("obsidian");
 var BriefingDashboardView = class extends import_obsidian2.ItemView {
-  constructor(leaf) {
+  constructor(leaf, plugin) {
     super(leaf);
     this.currentFile = null;
+    this.plugin = plugin;
   }
   getViewType() {
     return VIEW_TYPE_BRIEFING;
@@ -724,7 +729,8 @@ var BriefingDashboardView = class extends import_obsidian2.ItemView {
     await this.render();
     this.registerEvent(
       this.app.vault.on("create", (file) => {
-        if (file instanceof import_obsidian2.TFile && file.path.startsWith(ANALYSIS_FOLDER + "/brief-")) {
+        const analysisFolder = this.plugin.settings.analysisFolder;
+        if (file instanceof import_obsidian2.TFile && file.path.startsWith(analysisFolder + "/brief-")) {
           this.render();
         }
       })
@@ -743,7 +749,8 @@ var BriefingDashboardView = class extends import_obsidian2.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("bi-briefing");
-    const briefs = this.app.vault.getFiles().filter((f) => f.path.startsWith(ANALYSIS_FOLDER + "/") && f.basename.startsWith("brief-")).sort((a, b) => b.stat.mtime - a.stat.mtime);
+    const analysisFolder = this.plugin.settings.analysisFolder;
+    const briefs = this.app.vault.getFiles().filter((f) => f.path.startsWith(analysisFolder + "/") && f.basename.startsWith("brief-")).sort((a, b) => b.stat.mtime - a.stat.mtime);
     const header = container.createDiv({ cls: "bi-brief-header" });
     header.createEl("h4", { text: "\u{1F4CA} \uC218\uC8FC \uBE0C\uB9AC\uD551 \uB300\uC2DC\uBCF4\uB4DC" });
     header.createEl("span", {
@@ -891,9 +898,10 @@ var BriefingDashboardView = class extends import_obsidian2.ItemView {
 // src/views/AnalysisReportView.ts
 var import_obsidian3 = require("obsidian");
 var AnalysisReportView = class extends import_obsidian3.ItemView {
-  constructor(leaf) {
+  constructor(leaf, plugin) {
     super(leaf);
     this.selectedType = "all";
+    this.plugin = plugin;
   }
   getViewType() {
     return VIEW_TYPE_REPORT;
@@ -908,14 +916,16 @@ var AnalysisReportView = class extends import_obsidian3.ItemView {
     await this.render();
     this.registerEvent(
       this.app.vault.on("create", (file) => {
-        if (file instanceof import_obsidian3.TFile && file.path.startsWith(ANALYSIS_FOLDER + "/")) {
+        const analysisFolder = this.plugin.settings.analysisFolder;
+        if (file instanceof import_obsidian3.TFile && file.path.startsWith(analysisFolder + "/")) {
           this.render();
         }
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian3.TFile && file.path.startsWith(ANALYSIS_FOLDER + "/")) {
+        const analysisFolder = this.plugin.settings.analysisFolder;
+        if (file instanceof import_obsidian3.TFile && file.path.startsWith(analysisFolder + "/")) {
           this.render();
         }
       })
@@ -927,7 +937,7 @@ var AnalysisReportView = class extends import_obsidian3.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("bi-report");
-    const reports = getAnalysisReports(this.app.vault);
+    const reports = getAnalysisReports(this.app.vault, this.plugin.settings.analysisFolder);
     const header = container.createDiv({ cls: "bi-report-header" });
     header.createEl("h4", { text: "\u{1F4D1} \uBD84\uC11D \uB9AC\uD3EC\uD2B8" });
     header.createEl("span", {
@@ -1076,8 +1086,16 @@ var DEFAULT_SETTINGS = {
   autoFrontmatter: true,
   briefingKeywords: "\uAD50\uC721, ICT, ODA, \uB514\uC9C0\uD138, \uCEE8\uC124\uD305",
   briefingAgencies: "KOICA, \uB098\uB77C\uC7A5\uD130, NIPA, NIA",
-  language: "ko"
+  language: "ko",
+  contextFolder: DEFAULT_CONTEXT_FOLDER,
+  analysisFolder: DEFAULT_ANALYSIS_FOLDER
 };
+function normalizeFolderPath(input, fallback) {
+  if (!input)
+    return fallback;
+  const cleaned = input.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").trim();
+  return cleaned || fallback;
+}
 var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -1087,6 +1105,42 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Bid Intelligence \uC124\uC815" });
+    containerEl.createEl("h3", { text: "\u{1F4C1} \uD504\uB85C\uC81D\uD2B8 \uACBD\uB85C" });
+    const pathDesc = containerEl.createEl("p", {
+      cls: "setting-item-description"
+    });
+    pathDesc.style.marginBottom = "12px";
+    pathDesc.innerHTML = `
+			\uBCFC\uD2B8 \uB8E8\uD2B8 \uAE30\uC900 \uC0C1\uB300 \uACBD\uB85C\uC785\uB2C8\uB2E4.
+			<br>\u2022 \uAE30\uBCF8: <code>_context</code> / <code>_analysis</code>
+			<br>\u2022 \uD558\uC704 \uD504\uB85C\uC81D\uD2B8 \uC0AC\uC6A9 \uC2DC: <code>bid-pilot/_context</code> / <code>bid-pilot/_analysis</code>
+			<br>\u2022 \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14\uAC00 \uC989\uC2DC \uAC31\uC2E0\uB418\uC9C0 \uC54A\uC73C\uBA74 \uC544\uB798 "\uB2E4\uC2DC \uADF8\uB9AC\uAE30" \uBC84\uD2BC\uC744 \uB204\uB974\uC138\uC694.
+		`;
+    new import_obsidian5.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uD68C\uC0AC \uC790\uB8CC\uAC00 \uB4E4\uC5B4 \uC788\uB294 \uD3F4\uB354").addText(
+      (text) => text.setPlaceholder("_context \uB610\uB294 bid-pilot/_context").setValue(this.plugin.settings.contextFolder).onChange(async (value) => {
+        this.plugin.settings.contextFolder = normalizeFolderPath(
+          value,
+          DEFAULT_CONTEXT_FOLDER
+        );
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian5.Setting(containerEl).setName("\uBD84\uC11D \uACB0\uACFC \uD3F4\uB354 \uACBD\uB85C").setDesc("/bid-analyze, /brief \uACB0\uACFC\uAC00 \uC800\uC7A5\uB418\uB294 \uD3F4\uB354").addText(
+      (text) => text.setPlaceholder("_analysis \uB610\uB294 bid-pilot/_analysis").setValue(this.plugin.settings.analysisFolder).onChange(async (value) => {
+        this.plugin.settings.analysisFolder = normalizeFolderPath(
+          value,
+          DEFAULT_ANALYSIS_FOLDER
+        );
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian5.Setting(containerEl).setName("\uBDF0 \uC989\uC2DC \uAC31\uC2E0").setDesc("\uACBD\uB85C \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14/\uB300\uC2DC\uBCF4\uB4DC\uB97C \uC9C0\uAE08 \uB2E4\uC2DC \uADF8\uB9BD\uB2C8\uB2E4.").addButton(
+      (button) => button.setButtonText("\uB2E4\uC2DC \uADF8\uB9AC\uAE30").onClick(() => {
+        this.plugin.refreshAllViews();
+        button.setButtonText("\u2713 \uC644\uB8CC");
+        setTimeout(() => button.setButtonText("\uB2E4\uC2DC \uADF8\uB9AC\uAE30"), 1500);
+      })
+    );
     containerEl.createEl("h3", { text: "\u{1F916} AI \uC124\uC815" });
     new import_obsidian5.Setting(containerEl).setName("Gemini API \uD0A4").setDesc("Google AI Studio\uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4\uB97C \uC785\uB825\uD558\uC138\uC694.").addText(
       (text) => text.setPlaceholder("AIzaSy...").setValue(this.plugin.settings.geminiApiKey).onChange(async (value) => {
@@ -1169,22 +1223,12 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
     this.initGemini();
     this.addSettingTab(new BidIntelligenceSettingTab(this.app, this));
     this.registerView(VIEW_TYPE_CONTEXT, (leaf) => new ContextManagerView(leaf, this));
-    this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf));
-    this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf));
+    this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf, this));
+    this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf, this));
     this.addCommand({
       id: "open-context-manager",
       name: "\uCEE8\uD14D\uC2A4\uD2B8 \uB9E4\uB2C8\uC800 \uC5F4\uAE30",
       callback: () => this.activateView(VIEW_TYPE_CONTEXT, "left")
-    });
-    this.addCommand({
-      id: "open-briefing-dashboard",
-      name: "\uBE0C\uB9AC\uD551 \uB300\uC2DC\uBCF4\uB4DC \uC5F4\uAE30",
-      callback: () => this.activateView(VIEW_TYPE_BRIEFING, "right")
-    });
-    this.addCommand({
-      id: "open-analysis-report",
-      name: "\uBD84\uC11D \uB9AC\uD3EC\uD2B8 \uBDF0\uC5B4 \uC5F4\uAE30",
-      callback: () => this.activateView(VIEW_TYPE_REPORT, "right")
     });
     this.addCommand({
       id: "analyze-current-file",
@@ -1198,9 +1242,6 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
     });
     this.addRibbonIcon("database", "\uCEE8\uD14D\uC2A4\uD2B8 \uB9E4\uB2C8\uC800", () => {
       this.activateView(VIEW_TYPE_CONTEXT, "left");
-    });
-    this.addRibbonIcon("bar-chart-3", "\uBE0C\uB9AC\uD551 \uB300\uC2DC\uBCF4\uB4DC", () => {
-      this.activateView(VIEW_TYPE_BRIEFING, "right");
     });
     if (this.settings.autoAnalyzeContext) {
       this.registerEvent(
@@ -1278,10 +1319,10 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
       return;
     }
     const files = this.app.vault.getFiles().filter(
-      (f) => f.path.startsWith(CONTEXT_FOLDER + "/") && f.extension === "md"
+      (f) => f.path.startsWith(this.settings.contextFolder + "/") && f.extension === "md"
     );
     if (files.length === 0) {
-      new import_obsidian6.Notice("_context/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian6.Notice(`${this.settings.contextFolder}/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
       return;
     }
     new import_obsidian6.Notice(`\u{1F50D} ${files.length}\uAC1C \uD30C\uC77C \uBD84\uC11D \uC2DC\uC791...`);
@@ -1318,7 +1359,24 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
   shouldAutoAnalyze(file) {
     if (file.extension !== "md")
       return false;
-    return file.path.startsWith(CONTEXT_FOLDER + "/") || file.path.startsWith(ANALYSIS_FOLDER + "/");
+    return file.path.startsWith(this.settings.contextFolder + "/") || file.path.startsWith(this.settings.analysisFolder + "/");
+  }
+  /**
+   * 열려 있는 모든 플러그인 뷰를 다시 그린다 (설정에서 경로 바꾼 뒤 호출용).
+   */
+  refreshAllViews() {
+    for (const type of [VIEW_TYPE_CONTEXT, VIEW_TYPE_BRIEFING, VIEW_TYPE_REPORT]) {
+      const leaves = this.app.workspace.getLeavesOfType(type);
+      for (const leaf of leaves) {
+        const view = leaf.view;
+        if (view && typeof view.render === "function") {
+          try {
+            view.render();
+          } catch (e) {
+          }
+        }
+      }
+    }
   }
   /**
    * 파일 자동 분석 (백그라운드)
