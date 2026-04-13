@@ -13,6 +13,7 @@ import { buildContextBlock, buildRagBlock, activeFileRef } from "../utils/contex
 import { extractVideoId, fetchYoutubeTranscript } from "../utils/youtube";
 import { captureGraphBase64 } from "../utils/graphCapture";
 import type { ChatMessage } from "../utils/gemini";
+import { ApplyEditModal, parseEditProposals } from "./ApplyEditModal";
 
 const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.
 사용자가 제공한 회사 자료·공고문·경쟁사 정보를 근거로 제안서 작성을 돕습니다.
@@ -21,7 +22,19 @@ const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 
 - 한국어로 응답합니다.
 - 근거 없는 기관명·금액·수치·실적을 지어내지 않습니다.
 - 제공된 컨텍스트에 없는 사실은 "자료에 없음"으로 명시합니다.
-- 답변은 간결하고 실행 가능한 형태로 정리합니다.`;
+- 답변은 간결하고 실행 가능한 형태로 정리합니다.
+
+노트 편집 제안 규칙:
+사용자가 "이 섹션을 다시 써줘", "이 문단을 간결하게" 등 노트 편집을 요청하면
+제안 내용을 반드시 다음 형식으로 감쌉니다:
+
+<<<EDIT target="경로/파일명.md" mode="section" section="## 섹션제목">>>
+(교체할 새 내용 전체)
+<<<END_EDIT>>>
+
+mode 값: replace(전체 교체) / append(끝에 추가) / section(섹션 교체).
+target을 생략하면 활성 파일에 적용됩니다.
+이 태그 밖에도 설명을 자유롭게 쓸 수 있으나, 실제 적용 대상은 반드시 태그 안에만 넣습니다.`;
 
 export class ChatView extends ItemView {
 	private plugin: BidIntelligencePlugin;
@@ -265,6 +278,22 @@ export class ChatView extends ItemView {
 		body.empty();
 		if (msg.role === "assistant") {
 			MarkdownRenderer.render(this.app, msg.text || "…", body, "", this as unknown as Component);
+			// 스트리밍이 끝난(assistant pending=false) 메시지에서만 Apply 버튼 주입
+			if (!msg.pending) {
+				const proposals = parseEditProposals(msg.text);
+				if (proposals.length > 0) {
+					const actions = body.createDiv({ cls: "bi-chat-edit-actions" });
+					proposals.forEach((p, idx) => {
+						const btn = actions.createEl("button", {
+							text: `📝 ${p.targetPath || "활성 파일"} 에 적용 (${idx + 1}/${proposals.length})`,
+							cls: "bi-chat-apply-btn",
+						});
+						btn.onclick = () => {
+							new ApplyEditModal(this.app, p).open();
+						};
+					});
+				}
+			}
 		} else {
 			body.setText(msg.text);
 		}
@@ -433,6 +462,9 @@ export class ChatView extends ItemView {
 .bi-chat-btn-col { display: flex; flex-direction: column; gap: 4px; }
 .bi-chat-send, .bi-chat-stop { font-size: 11px; padding: 4px 10px; cursor: pointer; }
 .bi-chat-send:disabled, .bi-chat-stop:disabled { opacity: 0.4; cursor: not-allowed; }
+.bi-chat-edit-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--background-modifier-border); }
+.bi-chat-apply-btn { font-size: 11px; padding: 4px 8px; cursor: pointer; text-align: left; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 4px; }
+.bi-chat-apply-btn:hover { background: var(--interactive-accent-hover); }
 `;
 		document.head.appendChild(style);
 	}
