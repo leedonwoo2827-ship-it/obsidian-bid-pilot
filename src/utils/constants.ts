@@ -4,6 +4,7 @@ import { ItemView } from "obsidian";
 export const VIEW_TYPE_CONTEXT = "bid-context-manager";
 export const VIEW_TYPE_BRIEFING = "bid-briefing-dashboard";
 export const VIEW_TYPE_REPORT = "bid-analysis-report";
+export const VIEW_TYPE_CHAT = "bid-chat";
 
 // Default folder paths (actual values come from settings at runtime)
 export const DEFAULT_CONTEXT_FOLDER = "_context";

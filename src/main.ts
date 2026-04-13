@@ -3,10 +3,12 @@ import {
 	VIEW_TYPE_CONTEXT,
 	VIEW_TYPE_BRIEFING,
 	VIEW_TYPE_REPORT,
+	VIEW_TYPE_CHAT,
 } from "./utils/constants";
 import { ContextManagerView } from "./views/ContextManagerView";
 import { BriefingDashboardView } from "./views/BriefingDashboardView";
 import { AnalysisReportView } from "./views/AnalysisReportView";
+import { ChatView } from "./views/ChatView";
 import {
 	BidIntelligenceSettings,
 	BidIntelligenceSettingTab,
@@ -30,12 +32,19 @@ export default class BidIntelligencePlugin extends Plugin {
 		this.registerView(VIEW_TYPE_CONTEXT, (leaf) => new ContextManagerView(leaf, this));
 		this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf, this));
 		this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf, this));
+		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 
 		// Register commands
 		this.addCommand({
 			id: "open-context-manager",
 			name: "컨텍스트 매니저 열기",
 			callback: () => this.activateView(VIEW_TYPE_CONTEXT, "left"),
+		});
+
+		this.addCommand({
+			id: "open-chat",
+			name: "수주 AI 채팅 열기",
+			callback: () => this.activateView(VIEW_TYPE_CHAT, "right"),
 		});
 
 		this.addCommand({
@@ -53,6 +62,10 @@ export default class BidIntelligencePlugin extends Plugin {
 		// Ribbon icons
 		this.addRibbonIcon("database", "컨텍스트 매니저", () => {
 			this.activateView(VIEW_TYPE_CONTEXT, "left");
+		});
+
+		this.addRibbonIcon("messages-square", "수주 AI 채팅", () => {
+			this.activateView(VIEW_TYPE_CHAT, "right");
 		});
 
 		// Auto-analyze context files on create/modify
@@ -77,6 +90,7 @@ export default class BidIntelligencePlugin extends Plugin {
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CONTEXT);
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_BRIEFING);
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_REPORT);
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
 	}
 
 	async loadSettings(): Promise<void> {

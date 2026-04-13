@@ -12,6 +12,8 @@ export interface BidIntelligenceSettings {
 	language: string;
 	contextFolder: string;
 	analysisFolder: string;
+	chatHistoryLimit: number;
+	systemPromptOverride: string;
 }
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
@@ -24,6 +26,8 @@ export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	language: "ko",
 	contextFolder: DEFAULT_CONTEXT_FOLDER,
 	analysisFolder: DEFAULT_ANALYSIS_FOLDER,
+	chatHistoryLimit: 20,
+	systemPromptOverride: "",
 };
 
 /** 경로 문자열 정규화 (선후 슬래시 제거, 백슬래시→슬래시) */
@@ -164,6 +168,38 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// ── 채팅 설정 ──
+		containerEl.createEl("h3", { text: "💬 채팅" });
+
+		new Setting(containerEl)
+			.setName("히스토리 유지 턴 수")
+			.setDesc("Gemini에 전달할 최근 대화 쌍(user+assistant)의 개수. 길수록 문맥 유지, 토큰 사용 증가.")
+			.addText((text) =>
+				text
+					.setPlaceholder("20")
+					.setValue(String(this.plugin.settings.chatHistoryLimit))
+					.onChange(async (value) => {
+						const n = parseInt(value, 10);
+						this.plugin.settings.chatHistoryLimit =
+							Number.isFinite(n) && n > 0 ? n : 20;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("시스템 프롬프트 재정의")
+			.setDesc("비워두면 기본 수주 분석 프롬프트를 사용. 프로젝트별 규범을 강제하려면 여기에 기입.")
+			.addTextArea((text) => {
+				text.setValue(this.plugin.settings.systemPromptOverride).onChange(
+					async (value) => {
+						this.plugin.settings.systemPromptOverride = value;
+						await this.plugin.saveSettings();
+					}
+				);
+				text.inputEl.rows = 5;
+				text.inputEl.style.width = "100%";
+			});
 
 		// ── 브리핑 설정 ──
 		containerEl.createEl("h3", { text: "📋 브리핑" });

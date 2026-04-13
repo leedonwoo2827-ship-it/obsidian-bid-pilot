@@ -137,10 +137,10 @@ var gemini_exports = {};
 __export(gemini_exports, {
   GeminiClient: () => GeminiClient
 });
-var import_obsidian4, BASE_URL, GeminiClient, SYSTEM_INSTRUCTION;
+var import_obsidian6, BASE_URL, GeminiClient, SYSTEM_INSTRUCTION;
 var init_gemini = __esm({
   "src/utils/gemini.ts"() {
-    import_obsidian4 = require("obsidian");
+    import_obsidian6 = require("obsidian");
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
     GeminiClient = class {
       constructor(apiKey, model) {
@@ -180,7 +180,7 @@ var init_gemini = __esm({
             parts: [{ text: systemInstruction }]
           };
         }
-        const response = await (0, import_obsidian4.requestUrl)({
+        const response = await (0, import_obsidian6.requestUrl)({
           url,
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -288,6 +288,68 @@ ${content.slice(0, 6e3)}
         }
         return JSON.parse(cleaned);
       }
+      /**
+       * 멀티턴 스트리밍 생성.
+       * Obsidian requestUrl은 스트리밍 미지원이므로 전역 fetch + SSE 파싱 사용.
+       * onChunk 콜백으로 토큰이 도착하는 즉시 호출되며, 최종 전체 텍스트를 반환.
+       */
+      async generateStream(messages, opts) {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+        const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+        const body = {
+          contents: messages.map((m) => ({
+            role: m.role,
+            parts: [{ text: m.text }]
+          })),
+          generationConfig: {
+            temperature: (_a = opts.temperature) != null ? _a : 0.5,
+            maxOutputTokens: (_b = opts.maxOutputTokens) != null ? _b : 4096
+          }
+        };
+        if (opts.systemInstruction) {
+          body.systemInstruction = { parts: [{ text: opts.systemInstruction }] };
+        }
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: opts.signal
+        });
+        if (!response.ok || !response.body) {
+          const errText = await response.text().catch(() => "");
+          throw new Error(`Gemini \uC2A4\uD2B8\uB9BC \uC624\uB958: ${response.status} ${errText.slice(0, 200)}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let full = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done)
+            break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = (_c = events.pop()) != null ? _c : "";
+          for (const evt of events) {
+            const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
+            if (!dataLine)
+              continue;
+            const payload = dataLine.slice(5).trim();
+            if (!payload || payload === "[DONE]")
+              continue;
+            try {
+              const json = JSON.parse(payload);
+              const delta = (_i = (_h = (_g = (_f = (_e = (_d = json == null ? void 0 : json.candidates) == null ? void 0 : _d[0]) == null ? void 0 : _e.content) == null ? void 0 : _f.parts) == null ? void 0 : _g[0]) == null ? void 0 : _h.text) != null ? _i : "";
+              if (delta) {
+                full += delta;
+                opts.onChunk(delta);
+              }
+            } catch (e) {
+            }
+          }
+        }
+        return full;
+      }
     };
     SYSTEM_INSTRUCTION = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\uACF5\uC870\uB2EC/ODA \uC218\uC8FC \uBD84\uC11D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4.
 \uD56D\uC0C1 \uD55C\uAD6D\uC5B4\uB85C \uC751\uB2F5\uD558\uC138\uC694.
@@ -302,12 +364,13 @@ __export(main_exports, {
   default: () => BidIntelligencePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/utils/constants.ts
 var VIEW_TYPE_CONTEXT = "bid-context-manager";
 var VIEW_TYPE_BRIEFING = "bid-briefing-dashboard";
 var VIEW_TYPE_REPORT = "bid-analysis-report";
+var VIEW_TYPE_CHAT = "bid-chat";
 var DEFAULT_CONTEXT_FOLDER = "_context";
 var DEFAULT_ANALYSIS_FOLDER = "_analysis";
 var CONTEXT_CATEGORIES = {
@@ -1077,8 +1140,355 @@ var AnalysisReportView = class extends import_obsidian3.ItemView {
   }
 };
 
-// src/settings.ts
+// src/views/ChatView.ts
 var import_obsidian5 = require("obsidian");
+
+// src/utils/chatSession.ts
+var ChatSession = class {
+  constructor() {
+    this.messages = [];
+    this.pinnedContext = [];
+  }
+  addUser(text, contextLabels = []) {
+    const msg = { role: "user", text, contextLabels };
+    this.messages.push(msg);
+    return msg;
+  }
+  startAssistant() {
+    const msg = { role: "assistant", text: "", pending: true };
+    this.messages.push(msg);
+    return msg;
+  }
+  clear() {
+    this.messages = [];
+  }
+  togglePin(ref) {
+    const idx = this.pinnedContext.findIndex((p) => p.id === ref.id);
+    if (idx >= 0)
+      this.pinnedContext.splice(idx, 1);
+    else
+      this.pinnedContext.push(ref);
+  }
+  /**
+   * Gemini API 포맷으로 변환. 최근 historyLimit개 쌍(user+model)만 유지.
+   * 진행 중인 assistant 메시지(pending=true)는 제외.
+   */
+  toApiMessages(historyLimit) {
+    const completed = this.messages.filter((m) => !m.pending);
+    const sliced = completed.slice(-historyLimit * 2);
+    return sliced.map((m) => ({
+      role: m.role === "user" ? "user" : "model",
+      text: m.text
+    }));
+  }
+};
+
+// src/utils/contextBuilder.ts
+var import_obsidian4 = require("obsidian");
+async function buildContextBlock(app, refs, opts = {}) {
+  var _a, _b;
+  const perFile = (_a = opts.perFileCharBudget) != null ? _a : 4e3;
+  const total = (_b = opts.totalCharBudget) != null ? _b : 24e3;
+  const blocks = [];
+  let used = 0;
+  for (const ref of refs) {
+    if (used >= total)
+      break;
+    const block = await resolveRef(app, ref, perFile);
+    if (!block)
+      continue;
+    const truncated = used + block.length > total ? block.slice(0, total - used) + "\n\u2026(truncated)" : block;
+    blocks.push(truncated);
+    used += truncated.length;
+  }
+  return blocks.join("\n\n---\n\n");
+}
+async function resolveRef(app, ref, perFile) {
+  switch (ref.kind) {
+    case "note": {
+      const file = app.vault.getAbstractFileByPath(ref.id);
+      if (!(file instanceof import_obsidian4.TFile))
+        return null;
+      const text = await app.vault.cachedRead(file);
+      return `## \u{1F4C4} ${ref.label} (${ref.id})
+${text.slice(0, perFile)}`;
+    }
+    case "folder": {
+      const folder = app.vault.getAbstractFileByPath(ref.id);
+      if (!(folder instanceof import_obsidian4.TFolder))
+        return null;
+      const files = folder.children.filter(
+        (c) => c instanceof import_obsidian4.TFile && c.extension === "md"
+      );
+      if (files.length === 0)
+        return `## \u{1F4C1} ${ref.label} (\uBE44\uC5B4 \uC788\uC74C)`;
+      const summaries = await Promise.all(
+        files.slice(0, 10).map(async (f) => {
+          const t = await app.vault.cachedRead(f);
+          return `### ${f.name}
+${t.slice(0, Math.floor(perFile / files.length))}`;
+        })
+      );
+      return `## \u{1F4C1} ${ref.label}
+${summaries.join("\n\n")}`;
+    }
+    case "selection": {
+      return `## \u2702\uFE0F \uC120\uD0DD \uC601\uC5ED (${ref.label})
+${ref.id.slice(0, perFile)}`;
+    }
+    case "youtube":
+    case "graph":
+      return null;
+  }
+}
+function activeFileRef(app) {
+  const file = app.workspace.getActiveFile();
+  if (!file)
+    return null;
+  return { id: file.path, label: file.basename, kind: "note" };
+}
+
+// src/views/ChatView.ts
+var DEFAULT_CHAT_SYSTEM_PROMPT = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\uACF5\uC870\uB2EC/ODA \uC218\uC8FC \uBD84\uC11D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4.
+\uC0AC\uC6A9\uC790\uAC00 \uC81C\uACF5\uD55C \uD68C\uC0AC \uC790\uB8CC\xB7\uACF5\uACE0\uBB38\xB7\uACBD\uC7C1\uC0AC \uC815\uBCF4\uB97C \uADFC\uAC70\uB85C \uC81C\uC548\uC11C \uC791\uC131\uC744 \uB3D5\uC2B5\uB2C8\uB2E4.
+
+\uC6D0\uCE59:
+- \uD55C\uAD6D\uC5B4\uB85C \uC751\uB2F5\uD569\uB2C8\uB2E4.
+- \uADFC\uAC70 \uC5C6\uB294 \uAE30\uAD00\uBA85\xB7\uAE08\uC561\xB7\uC218\uCE58\xB7\uC2E4\uC801\uC744 \uC9C0\uC5B4\uB0B4\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.
+- \uC81C\uACF5\uB41C \uCEE8\uD14D\uC2A4\uD2B8\uC5D0 \uC5C6\uB294 \uC0AC\uC2E4\uC740 "\uC790\uB8CC\uC5D0 \uC5C6\uC74C"\uC73C\uB85C \uBA85\uC2DC\uD569\uB2C8\uB2E4.
+- \uB2F5\uBCC0\uC740 \uAC04\uACB0\uD558\uACE0 \uC2E4\uD589 \uAC00\uB2A5\uD55C \uD615\uD0DC\uB85C \uC815\uB9AC\uD569\uB2C8\uB2E4.`;
+var ChatView = class extends import_obsidian5.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.session = new ChatSession();
+    this.abortCtrl = null;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return VIEW_TYPE_CHAT;
+  }
+  getDisplayText() {
+    return "\uC218\uC8FC AI \uCC44\uD305";
+  }
+  getIcon() {
+    return "messages-square";
+  }
+  async onOpen() {
+    this.render();
+  }
+  async onClose() {
+    var _a;
+    (_a = this.abortCtrl) == null ? void 0 : _a.abort();
+  }
+  render() {
+    const root = this.containerEl.children[1];
+    root.empty();
+    root.addClass("bi-chat");
+    const header = root.createDiv({ cls: "bi-chat-header" });
+    header.createEl("h4", { text: "\u{1F4AC} \uC218\uC8FC AI \uCC44\uD305" });
+    const actions = header.createDiv({ cls: "bi-chat-actions" });
+    const pinActiveBtn = actions.createEl("button", {
+      text: "\u{1F4CE} \uD604\uC7AC \uB178\uD2B8",
+      cls: "bi-chat-btn"
+    });
+    pinActiveBtn.onclick = () => this.pinActiveFile();
+    const clearBtn = actions.createEl("button", { text: "\u{1F5D1}\uFE0F", cls: "bi-chat-btn" });
+    clearBtn.title = "\uB300\uD654 \uCD08\uAE30\uD654";
+    clearBtn.onclick = () => {
+      this.session.clear();
+      this.renderMessages();
+    };
+    this.pinsEl = root.createDiv({ cls: "bi-chat-pins" });
+    this.renderPins();
+    this.messagesEl = root.createDiv({ cls: "bi-chat-messages" });
+    this.renderMessages();
+    const inputRow = root.createDiv({ cls: "bi-chat-input-row" });
+    this.inputEl = inputRow.createEl("textarea", {
+      cls: "bi-chat-input",
+      attr: { placeholder: "\uC9C8\uBB38\uC744 \uC785\uB825\uD558\uC138\uC694. (Ctrl+Enter \uC804\uC1A1)", rows: "3" }
+    });
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        this.handleSend();
+      }
+    });
+    const btnCol = inputRow.createDiv({ cls: "bi-chat-btn-col" });
+    this.sendBtn = btnCol.createEl("button", { text: "\uC804\uC1A1", cls: "bi-chat-send" });
+    this.sendBtn.onclick = () => this.handleSend();
+    this.stopBtn = btnCol.createEl("button", { text: "\uC911\uB2E8", cls: "bi-chat-stop" });
+    this.stopBtn.onclick = () => {
+      var _a;
+      return (_a = this.abortCtrl) == null ? void 0 : _a.abort();
+    };
+    this.stopBtn.disabled = true;
+    this.injectStyle();
+  }
+  pinActiveFile() {
+    const ref = activeFileRef(this.app);
+    if (!ref) {
+      new import_obsidian5.Notice("\uD65C\uC131 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    this.session.togglePin(ref);
+    this.renderPins();
+  }
+  renderPins() {
+    this.pinsEl.empty();
+    if (this.session.pinnedContext.length === 0) {
+      this.pinsEl.createEl("span", {
+        text: "\uCEE8\uD14D\uC2A4\uD2B8 \uC5C6\uC74C (\uD604\uC7AC \uB178\uD2B8 \uBC84\uD2BC\uC73C\uB85C \uCD94\uAC00)",
+        cls: "bi-chat-pins-empty"
+      });
+      return;
+    }
+    for (const ref of this.session.pinnedContext) {
+      const chip = this.pinsEl.createDiv({ cls: "bi-chat-chip" });
+      chip.createEl("span", { text: this.chipIcon(ref.kind) + " " + ref.label });
+      const close = chip.createEl("span", { text: "\xD7", cls: "bi-chat-chip-x" });
+      close.onclick = () => {
+        this.session.togglePin(ref);
+        this.renderPins();
+      };
+    }
+  }
+  chipIcon(kind) {
+    return { note: "\u{1F4C4}", folder: "\u{1F4C1}", selection: "\u2702\uFE0F", youtube: "\u25B6\uFE0F", graph: "\u{1F578}\uFE0F" }[kind];
+  }
+  renderMessages() {
+    this.messagesEl.empty();
+    if (this.session.messages.length === 0) {
+      this.messagesEl.createEl("div", {
+        cls: "bi-chat-empty",
+        text: "\uC544\uC9C1 \uB300\uD654\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uB178\uD2B8\uB97C \uD540\uD55C \uB4A4 \uC9C8\uBB38\uD574 \uBCF4\uC138\uC694."
+      });
+      return;
+    }
+    for (const msg of this.session.messages) {
+      this.renderMessage(msg);
+    }
+    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  }
+  renderMessage(msg) {
+    const wrap = this.messagesEl.createDiv({
+      cls: `bi-chat-msg bi-chat-msg-${msg.role}`
+    });
+    const label = wrap.createEl("div", { cls: "bi-chat-msg-label" });
+    label.setText(msg.role === "user" ? "\u{1F64B} \uB098" : "\u{1F916} AI");
+    if (msg.pending)
+      label.createEl("span", { cls: "bi-chat-spinner", text: " \u25CF\u25CF\u25CF" });
+    const body = wrap.createDiv({ cls: "bi-chat-msg-body" });
+    this.renderBody(body, msg);
+    if (msg.contextLabels && msg.contextLabels.length > 0) {
+      const ctxRow = wrap.createDiv({ cls: "bi-chat-msg-ctx" });
+      ctxRow.setText("\uCC38\uC870: " + msg.contextLabels.join(", "));
+    }
+    return body;
+  }
+  renderBody(body, msg) {
+    body.empty();
+    if (msg.role === "assistant") {
+      import_obsidian5.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
+    } else {
+      body.setText(msg.text);
+    }
+  }
+  async handleSend() {
+    var _a, _b;
+    if (!this.plugin.gemini) {
+      new import_obsidian5.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    const text = this.inputEl.value.trim();
+    if (!text)
+      return;
+    this.inputEl.value = "";
+    this.sendBtn.disabled = true;
+    this.stopBtn.disabled = false;
+    const contextLabels = this.session.pinnedContext.map((p) => p.label);
+    this.session.addUser(text, contextLabels);
+    const assistant = this.session.startAssistant();
+    this.renderMessages();
+    try {
+      const contextBlock = await buildContextBlock(
+        this.app,
+        this.session.pinnedContext
+      );
+      const history = this.session.toApiMessages((_a = this.plugin.settings.chatHistoryLimit) != null ? _a : 20);
+      if (history.length > 0 && contextBlock) {
+        const last = history[history.length - 1];
+        last.text = `# \uCC38\uC870 \uCEE8\uD14D\uC2A4\uD2B8
+${contextBlock}
+
+# \uC9C8\uBB38
+${last.text}`;
+      }
+      const systemPrompt = ((_b = this.plugin.settings.systemPromptOverride) == null ? void 0 : _b.trim()) || DEFAULT_CHAT_SYSTEM_PROMPT;
+      this.abortCtrl = new AbortController();
+      const lastWrap = this.messagesEl.lastElementChild;
+      const bodyEl = lastWrap.querySelector(".bi-chat-msg-body");
+      await this.plugin.gemini.generateStream(history, {
+        systemInstruction: systemPrompt,
+        signal: this.abortCtrl.signal,
+        onChunk: (delta) => {
+          assistant.text += delta;
+          this.renderBody(bodyEl, assistant);
+          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        }
+      });
+    } catch (e) {
+      if (e.name === "AbortError") {
+        assistant.text += "\n\n_(\uC911\uB2E8\uB428)_";
+      } else {
+        assistant.text = `\u274C \uC624\uB958: ${e.message || e}`;
+      }
+    } finally {
+      assistant.pending = false;
+      this.abortCtrl = null;
+      this.sendBtn.disabled = false;
+      this.stopBtn.disabled = true;
+      this.renderMessages();
+    }
+  }
+  injectStyle() {
+    if (document.getElementById("bi-chat-style"))
+      return;
+    const style = document.createElement("style");
+    style.id = "bi-chat-style";
+    style.textContent = `
+.bi-chat { display: flex; flex-direction: column; height: 100%; padding: 8px; gap: 8px; }
+.bi-chat-header { display: flex; align-items: center; justify-content: space-between; }
+.bi-chat-header h4 { margin: 0; }
+.bi-chat-actions { display: flex; gap: 4px; }
+.bi-chat-btn { font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.bi-chat-pins { display: flex; flex-wrap: wrap; gap: 4px; min-height: 24px; padding: 4px; border: 1px dashed var(--background-modifier-border); border-radius: 4px; }
+.bi-chat-pins-empty { color: var(--text-muted); font-size: 11px; }
+.bi-chat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; background: var(--background-secondary); border-radius: 10px; font-size: 11px; }
+.bi-chat-chip-x { cursor: pointer; color: var(--text-muted); font-weight: bold; }
+.bi-chat-chip-x:hover { color: var(--text-error); }
+.bi-chat-messages { flex: 1; overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 10px; }
+.bi-chat-empty { color: var(--text-muted); text-align: center; padding: 20px; font-size: 12px; }
+.bi-chat-msg { border-radius: 6px; padding: 6px 8px; }
+.bi-chat-msg-user { background: var(--background-secondary); }
+.bi-chat-msg-assistant { background: var(--background-primary-alt); }
+.bi-chat-msg-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+.bi-chat-msg-body { font-size: 13px; line-height: 1.5; }
+.bi-chat-msg-body p { margin: 4px 0; }
+.bi-chat-msg-ctx { font-size: 10px; color: var(--text-muted); margin-top: 4px; font-style: italic; }
+.bi-chat-spinner { color: var(--text-accent); animation: bi-blink 1s infinite; }
+@keyframes bi-blink { 50% { opacity: 0.3; } }
+.bi-chat-input-row { display: flex; gap: 4px; }
+.bi-chat-input { flex: 1; resize: vertical; font-family: inherit; }
+.bi-chat-btn-col { display: flex; flex-direction: column; gap: 4px; }
+.bi-chat-send, .bi-chat-stop { font-size: 11px; padding: 4px 10px; cursor: pointer; }
+.bi-chat-send:disabled, .bi-chat-stop:disabled { opacity: 0.4; cursor: not-allowed; }
+`;
+    document.head.appendChild(style);
+  }
+};
+
+// src/settings.ts
+var import_obsidian7 = require("obsidian");
 var DEFAULT_SETTINGS = {
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
@@ -1088,7 +1498,9 @@ var DEFAULT_SETTINGS = {
   briefingAgencies: "KOICA, \uB098\uB77C\uC7A5\uD130, NIPA, NIA",
   language: "ko",
   contextFolder: DEFAULT_CONTEXT_FOLDER,
-  analysisFolder: DEFAULT_ANALYSIS_FOLDER
+  analysisFolder: DEFAULT_ANALYSIS_FOLDER,
+  chatHistoryLimit: 20,
+  systemPromptOverride: ""
 };
 function normalizeFolderPath(input, fallback) {
   if (!input)
@@ -1096,7 +1508,7 @@ function normalizeFolderPath(input, fallback) {
   const cleaned = input.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").trim();
   return cleaned || fallback;
 }
-var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab {
+var BidIntelligenceSettingTab = class extends import_obsidian7.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1116,7 +1528,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
 			<br>\u2022 \uD558\uC704 \uD504\uB85C\uC81D\uD2B8 \uC0AC\uC6A9 \uC2DC: <code>bid-pilot/_context</code> / <code>bid-pilot/_analysis</code>
 			<br>\u2022 \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14\uAC00 \uC989\uC2DC \uAC31\uC2E0\uB418\uC9C0 \uC54A\uC73C\uBA74 \uC544\uB798 "\uB2E4\uC2DC \uADF8\uB9AC\uAE30" \uBC84\uD2BC\uC744 \uB204\uB974\uC138\uC694.
 		`;
-    new import_obsidian5.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uD68C\uC0AC \uC790\uB8CC\uAC00 \uB4E4\uC5B4 \uC788\uB294 \uD3F4\uB354").addText(
+    new import_obsidian7.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uD68C\uC0AC \uC790\uB8CC\uAC00 \uB4E4\uC5B4 \uC788\uB294 \uD3F4\uB354").addText(
       (text) => text.setPlaceholder("_context \uB610\uB294 bid-pilot/_context").setValue(this.plugin.settings.contextFolder).onChange(async (value) => {
         this.plugin.settings.contextFolder = normalizeFolderPath(
           value,
@@ -1125,7 +1537,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("\uBD84\uC11D \uACB0\uACFC \uD3F4\uB354 \uACBD\uB85C").setDesc("/bid-analyze, /brief \uACB0\uACFC\uAC00 \uC800\uC7A5\uB418\uB294 \uD3F4\uB354").addText(
+    new import_obsidian7.Setting(containerEl).setName("\uBD84\uC11D \uACB0\uACFC \uD3F4\uB354 \uACBD\uB85C").setDesc("/bid-analyze, /brief \uACB0\uACFC\uAC00 \uC800\uC7A5\uB418\uB294 \uD3F4\uB354").addText(
       (text) => text.setPlaceholder("_analysis \uB610\uB294 bid-pilot/_analysis").setValue(this.plugin.settings.analysisFolder).onChange(async (value) => {
         this.plugin.settings.analysisFolder = normalizeFolderPath(
           value,
@@ -1134,7 +1546,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("\uBDF0 \uC989\uC2DC \uAC31\uC2E0").setDesc("\uACBD\uB85C \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14/\uB300\uC2DC\uBCF4\uB4DC\uB97C \uC9C0\uAE08 \uB2E4\uC2DC \uADF8\uB9BD\uB2C8\uB2E4.").addButton(
+    new import_obsidian7.Setting(containerEl).setName("\uBDF0 \uC989\uC2DC \uAC31\uC2E0").setDesc("\uACBD\uB85C \uBCC0\uACBD \uD6C4 \uC0AC\uC774\uB4DC\uBC14/\uB300\uC2DC\uBCF4\uB4DC\uB97C \uC9C0\uAE08 \uB2E4\uC2DC \uADF8\uB9BD\uB2C8\uB2E4.").addButton(
       (button) => button.setButtonText("\uB2E4\uC2DC \uADF8\uB9AC\uAE30").onClick(() => {
         this.plugin.refreshAllViews();
         button.setButtonText("\u2713 \uC644\uB8CC");
@@ -1142,46 +1554,64 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
       })
     );
     containerEl.createEl("h3", { text: "\u{1F916} AI \uC124\uC815" });
-    new import_obsidian5.Setting(containerEl).setName("Gemini API \uD0A4").setDesc("Google AI Studio\uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4\uB97C \uC785\uB825\uD558\uC138\uC694.").addText(
+    new import_obsidian7.Setting(containerEl).setName("Gemini API \uD0A4").setDesc("Google AI Studio\uC5D0\uC11C \uBC1C\uAE09\uBC1B\uC740 API \uD0A4\uB97C \uC785\uB825\uD558\uC138\uC694.").addText(
       (text) => text.setPlaceholder("AIzaSy...").setValue(this.plugin.settings.geminiApiKey).onChange(async (value) => {
         this.plugin.settings.geminiApiKey = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("Gemini \uBAA8\uB378").setDesc("\uC0AC\uC6A9\uD560 Gemini \uBAA8\uB378\uC744 \uC120\uD0DD\uD558\uC138\uC694.").addDropdown(
+    new import_obsidian7.Setting(containerEl).setName("Gemini \uBAA8\uB378").setDesc("\uC0AC\uC6A9\uD560 Gemini \uBAA8\uB378\uC744 \uC120\uD0DD\uD558\uC138\uC694.").addDropdown(
       (dropdown) => dropdown.addOption("gemini-2.5-flash", "Gemini 2.5 Flash (\uBE60\uB984, \uBC94\uC6A9)").addOption("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (\uC800\uBE44\uC6A9)").addOption("gemini-2.5-pro", "Gemini 2.5 Pro (\uACE0\uD488\uC9C8)").setValue(this.plugin.settings.geminiModel).onChange(async (value) => {
         this.plugin.settings.geminiModel = value;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u2699\uFE0F \uC790\uB3D9\uD654" });
-    new import_obsidian5.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uC790\uB3D9 \uBD84\uC11D").setDesc("_context/ \uD3F4\uB354 \uD30C\uC77C\uC774 \uCD94\uAC00/\uBCC0\uACBD\uB418\uBA74 Gemini\uB85C \uC790\uB3D9 \uC694\uC57D\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian7.Setting(containerEl).setName("\uCEE8\uD14D\uC2A4\uD2B8 \uC790\uB3D9 \uBD84\uC11D").setDesc("_context/ \uD3F4\uB354 \uD30C\uC77C\uC774 \uCD94\uAC00/\uBCC0\uACBD\uB418\uBA74 Gemini\uB85C \uC790\uB3D9 \uC694\uC57D\uD569\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoAnalyzeContext).onChange(async (value) => {
         this.plugin.settings.autoAnalyzeContext = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("\uD504\uB85C\uD37C\uD2F0 \uC790\uB3D9 \uC0DD\uC131").setDesc("\uBD84\uC11D \uACB0\uACFC\uB97C \uD30C\uC77C \uD504\uB85C\uD37C\uD2F0(frontmatter)\uC5D0 \uC790\uB3D9 \uAE30\uB85D\uD569\uB2C8\uB2E4.").addToggle(
+    new import_obsidian7.Setting(containerEl).setName("\uD504\uB85C\uD37C\uD2F0 \uC790\uB3D9 \uC0DD\uC131").setDesc("\uBD84\uC11D \uACB0\uACFC\uB97C \uD30C\uC77C \uD504\uB85C\uD37C\uD2F0(frontmatter)\uC5D0 \uC790\uB3D9 \uAE30\uB85D\uD569\uB2C8\uB2E4.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoFrontmatter).onChange(async (value) => {
         this.plugin.settings.autoFrontmatter = value;
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h3", { text: "\u{1F4AC} \uCC44\uD305" });
+    new import_obsidian7.Setting(containerEl).setName("\uD788\uC2A4\uD1A0\uB9AC \uC720\uC9C0 \uD134 \uC218").setDesc("Gemini\uC5D0 \uC804\uB2EC\uD560 \uCD5C\uADFC \uB300\uD654 \uC30D(user+assistant)\uC758 \uAC1C\uC218. \uAE38\uC218\uB85D \uBB38\uB9E5 \uC720\uC9C0, \uD1A0\uD070 \uC0AC\uC6A9 \uC99D\uAC00.").addText(
+      (text) => text.setPlaceholder("20").setValue(String(this.plugin.settings.chatHistoryLimit)).onChange(async (value) => {
+        const n = parseInt(value, 10);
+        this.plugin.settings.chatHistoryLimit = Number.isFinite(n) && n > 0 ? n : 20;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian7.Setting(containerEl).setName("\uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8 \uC7AC\uC815\uC758").setDesc("\uBE44\uC6CC\uB450\uBA74 \uAE30\uBCF8 \uC218\uC8FC \uBD84\uC11D \uD504\uB86C\uD504\uD2B8\uB97C \uC0AC\uC6A9. \uD504\uB85C\uC81D\uD2B8\uBCC4 \uADDC\uBC94\uC744 \uAC15\uC81C\uD558\uB824\uBA74 \uC5EC\uAE30\uC5D0 \uAE30\uC785.").addTextArea((text) => {
+      text.setValue(this.plugin.settings.systemPromptOverride).onChange(
+        async (value) => {
+          this.plugin.settings.systemPromptOverride = value;
+          await this.plugin.saveSettings();
+        }
+      );
+      text.inputEl.rows = 5;
+      text.inputEl.style.width = "100%";
+    });
     containerEl.createEl("h3", { text: "\u{1F4CB} \uBE0C\uB9AC\uD551" });
-    new import_obsidian5.Setting(containerEl).setName("\uAD00\uC2EC \uD0A4\uC6CC\uB4DC").setDesc("\uBE0C\uB9AC\uD551 \uC2DC \uAC80\uC0C9\uD560 \uD0A4\uC6CC\uB4DC (\uC27C\uD45C \uAD6C\uBD84)").addText(
+    new import_obsidian7.Setting(containerEl).setName("\uAD00\uC2EC \uD0A4\uC6CC\uB4DC").setDesc("\uBE0C\uB9AC\uD551 \uC2DC \uAC80\uC0C9\uD560 \uD0A4\uC6CC\uB4DC (\uC27C\uD45C \uAD6C\uBD84)").addText(
       (text) => text.setPlaceholder("\uAD50\uC721, ICT, ODA").setValue(this.plugin.settings.briefingKeywords).onChange(async (value) => {
         this.plugin.settings.briefingKeywords = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian5.Setting(containerEl).setName("\uAD00\uC2EC \uBC1C\uC8FC\uCC98").setDesc("\uBAA8\uB2C8\uD130\uB9C1\uD560 \uBC1C\uC8FC\uCC98 (\uC27C\uD45C \uAD6C\uBD84)").addText(
+    new import_obsidian7.Setting(containerEl).setName("\uAD00\uC2EC \uBC1C\uC8FC\uCC98").setDesc("\uBAA8\uB2C8\uD130\uB9C1\uD560 \uBC1C\uC8FC\uCC98 (\uC27C\uD45C \uAD6C\uBD84)").addText(
       (text) => text.setPlaceholder("KOICA, \uB098\uB77C\uC7A5\uD130, NIPA").setValue(this.plugin.settings.briefingAgencies).onChange(async (value) => {
         this.plugin.settings.briefingAgencies = value;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("h3", { text: "\u{1F527} \uC9C4\uB2E8" });
-    new import_obsidian5.Setting(containerEl).setName("API \uC5F0\uACB0 \uD14C\uC2A4\uD2B8").setDesc("Gemini API\uAC00 \uC815\uC0C1 \uC791\uB3D9\uD558\uB294\uC9C0 \uD655\uC778\uD569\uB2C8\uB2E4.").addButton(
+    new import_obsidian7.Setting(containerEl).setName("API \uC5F0\uACB0 \uD14C\uC2A4\uD2B8").setDesc("Gemini API\uAC00 \uC815\uC0C1 \uC791\uB3D9\uD558\uB294\uC9C0 \uD655\uC778\uD569\uB2C8\uB2E4.").addButton(
       (button) => button.setButtonText("\uD14C\uC2A4\uD2B8").onClick(async () => {
         button.setButtonText("\uD14C\uC2A4\uD2B8 \uC911...");
         button.setDisabled(true);
@@ -1212,7 +1642,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
 // src/main.ts
 init_gemini();
 init_frontmatter();
-var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
+var BidIntelligencePlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -1225,10 +1655,16 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
     this.registerView(VIEW_TYPE_CONTEXT, (leaf) => new ContextManagerView(leaf, this));
     this.registerView(VIEW_TYPE_BRIEFING, (leaf) => new BriefingDashboardView(leaf, this));
     this.registerView(VIEW_TYPE_REPORT, (leaf) => new AnalysisReportView(leaf, this));
+    this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
     this.addCommand({
       id: "open-context-manager",
       name: "\uCEE8\uD14D\uC2A4\uD2B8 \uB9E4\uB2C8\uC800 \uC5F4\uAE30",
       callback: () => this.activateView(VIEW_TYPE_CONTEXT, "left")
+    });
+    this.addCommand({
+      id: "open-chat",
+      name: "\uC218\uC8FC AI \uCC44\uD305 \uC5F4\uAE30",
+      callback: () => this.activateView(VIEW_TYPE_CHAT, "right")
     });
     this.addCommand({
       id: "analyze-current-file",
@@ -1243,10 +1679,13 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
     this.addRibbonIcon("database", "\uCEE8\uD14D\uC2A4\uD2B8 \uB9E4\uB2C8\uC800", () => {
       this.activateView(VIEW_TYPE_CONTEXT, "left");
     });
+    this.addRibbonIcon("messages-square", "\uC218\uC8FC AI \uCC44\uD305", () => {
+      this.activateView(VIEW_TYPE_CHAT, "right");
+    });
     if (this.settings.autoAnalyzeContext) {
       this.registerEvent(
         this.app.vault.on("create", (file) => {
-          if (file instanceof import_obsidian6.TFile && this.shouldAutoAnalyze(file)) {
+          if (file instanceof import_obsidian8.TFile && this.shouldAutoAnalyze(file)) {
             setTimeout(() => this.autoAnalyzeFile(file), 2e3);
           }
         })
@@ -1260,6 +1699,7 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CONTEXT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_BRIEFING);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_REPORT);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -1283,19 +1723,19 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
    */
   async analyzeCurrentFile() {
     if (!this.gemini) {
-      new import_obsidian6.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian8.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const file = this.app.workspace.getActiveFile();
     if (!file) {
-      new import_obsidian6.Notice("\uC5F4\uB9B0 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian8.Notice("\uC5F4\uB9B0 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     if (file.extension !== "md") {
-      new import_obsidian6.Notice("\uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uB9CC \uBD84\uC11D\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian8.Notice("\uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uB9CC \uBD84\uC11D\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
       return;
     }
-    new import_obsidian6.Notice(`\u{1F50D} ${file.basename} \uBD84\uC11D \uC911...`);
+    new import_obsidian8.Notice(`\u{1F50D} ${file.basename} \uBD84\uC11D \uC911...`);
     try {
       const content = await this.app.vault.read(file);
       const existing = getFrontmatter(file, this.app.metadataCache);
@@ -1305,9 +1745,9 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
         existing
       );
       await updateFrontmatter(file, this.app.vault, props);
-      new import_obsidian6.Notice(`\u2705 ${file.basename} \uD504\uB85C\uD37C\uD2F0 \uC0DD\uC131 \uC644\uB8CC`);
+      new import_obsidian8.Notice(`\u2705 ${file.basename} \uD504\uB85C\uD37C\uD2F0 \uC0DD\uC131 \uC644\uB8CC`);
     } catch (e) {
-      new import_obsidian6.Notice(`\u274C \uBD84\uC11D \uC2E4\uD328: ${e.message}`);
+      new import_obsidian8.Notice(`\u274C \uBD84\uC11D \uC2E4\uD328: ${e.message}`);
     }
   }
   /**
@@ -1315,17 +1755,17 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
    */
   async analyzeAllContext() {
     if (!this.gemini) {
-      new import_obsidian6.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian8.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const files = this.app.vault.getFiles().filter(
       (f) => f.path.startsWith(this.settings.contextFolder + "/") && f.extension === "md"
     );
     if (files.length === 0) {
-      new import_obsidian6.Notice(`${this.settings.contextFolder}/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      new import_obsidian8.Notice(`${this.settings.contextFolder}/ \uD3F4\uB354\uC5D0 \uB9C8\uD06C\uB2E4\uC6B4 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
       return;
     }
-    new import_obsidian6.Notice(`\u{1F50D} ${files.length}\uAC1C \uD30C\uC77C \uBD84\uC11D \uC2DC\uC791...`);
+    new import_obsidian8.Notice(`\u{1F50D} ${files.length}\uAC1C \uD30C\uC77C \uBD84\uC11D \uC2DC\uC791...`);
     let done = 0;
     let failed = 0;
     for (const file of files) {
@@ -1351,7 +1791,7 @@ var BidIntelligencePlugin = class extends import_obsidian6.Plugin {
         failed++;
       }
     }
-    new import_obsidian6.Notice(`\u2705 \uBD84\uC11D \uC644\uB8CC: ${done}\uAC1C \uC131\uACF5, ${failed}\uAC1C \uC2E4\uD328`);
+    new import_obsidian8.Notice(`\u2705 \uBD84\uC11D \uC644\uB8CC: ${done}\uAC1C \uC131\uACF5, ${failed}\uAC1C \uC2E4\uD328`);
   }
   /**
    * 파일이 자동 분석 대상인지 확인
