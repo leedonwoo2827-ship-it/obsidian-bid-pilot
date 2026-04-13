@@ -1071,7 +1071,7 @@ var AnalysisReportView = class extends import_obsidian3.ItemView {
 var import_obsidian5 = require("obsidian");
 var DEFAULT_SETTINGS = {
   geminiApiKey: "",
-  geminiModel: "gemini-2.0-flash",
+  geminiModel: "gemini-2.5-flash",
   autoAnalyzeContext: true,
   autoFrontmatter: true,
   briefingKeywords: "\uAD50\uC721, ICT, ODA, \uB514\uC9C0\uD138, \uCEE8\uC124\uD305",
@@ -1095,7 +1095,7 @@ var BidIntelligenceSettingTab = class extends import_obsidian5.PluginSettingTab 
       })
     );
     new import_obsidian5.Setting(containerEl).setName("Gemini \uBAA8\uB378").setDesc("\uC0AC\uC6A9\uD560 Gemini \uBAA8\uB378\uC744 \uC120\uD0DD\uD558\uC138\uC694.").addDropdown(
-      (dropdown) => dropdown.addOption("gemini-2.0-flash", "Gemini 2.0 Flash (\uBE60\uB984, \uBB34\uB8CC)").addOption("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash (\uCD5C\uC2E0)").addOption("gemini-2.5-pro-preview-05-06", "Gemini 2.5 Pro (\uACE0\uD488\uC9C8)").setValue(this.plugin.settings.geminiModel).onChange(async (value) => {
+      (dropdown) => dropdown.addOption("gemini-2.5-flash", "Gemini 2.5 Flash (\uBE60\uB984, \uBC94\uC6A9)").addOption("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (\uC800\uBE44\uC6A9)").addOption("gemini-2.5-pro", "Gemini 2.5 Pro (\uACE0\uD488\uC9C8)").setValue(this.plugin.settings.geminiModel).onChange(async (value) => {
         this.plugin.settings.geminiModel = value;
         await this.plugin.saveSettings();
       })

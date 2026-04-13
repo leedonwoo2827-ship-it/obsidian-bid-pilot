@@ -13,7 +13,7 @@ export interface BidIntelligenceSettings {
 
 export const DEFAULT_SETTINGS: BidIntelligenceSettings = {
 	geminiApiKey: "",
-	geminiModel: "gemini-2.0-flash",
+	geminiModel: "gemini-2.5-flash",
 	autoAnalyzeContext: true,
 	autoFrontmatter: true,
 	briefingKeywords: "교육, ICT, ODA, 디지털, 컨설팅",
@@ -56,9 +56,9 @@ export class BidIntelligenceSettingTab extends PluginSettingTab {
 			.setDesc("사용할 Gemini 모델을 선택하세요.")
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOption("gemini-2.0-flash", "Gemini 2.0 Flash (빠름, 무료)")
-					.addOption("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash (최신)")
-					.addOption("gemini-2.5-pro-preview-05-06", "Gemini 2.5 Pro (고품질)")
+					.addOption("gemini-2.5-flash", "Gemini 2.5 Flash (빠름, 범용)")
+					.addOption("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (저비용)")
+					.addOption("gemini-2.5-pro", "Gemini 2.5 Pro (고품질)")
 					.setValue(this.plugin.settings.geminiModel)
 					.onChange(async (value) => {
 						this.plugin.settings.geminiModel = value;
