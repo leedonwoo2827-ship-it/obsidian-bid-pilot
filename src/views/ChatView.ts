@@ -444,10 +444,79 @@ export class ChatView extends ItemView {
 					}
 					return;
 				}
+
+				// fallback: 태그도 코드블록도 없으면 전체 응답을 적용 가능하게 제공
+				MarkdownRenderer.render(this.app, msg.text, body, "", this as unknown as Component);
+				this.renderQuickApplyBar(body, msg.text);
+				return;
 			}
 			MarkdownRenderer.render(this.app, msg.text || "…", body, "", this as unknown as Component);
 		} else {
 			body.setText(msg.text);
+		}
+	}
+
+	/**
+	 * 모든 완료된 AI 응답 하단에 "활성 노트에 적용" 바를 표시.
+	 * EDIT 태그나 코드블록이 없어도 항상 사용 가능.
+	 */
+	private renderQuickApplyBar(container: HTMLElement, text: string): void {
+		const bar = container.createDiv({ cls: "bi-quick-apply-bar" });
+
+		const replaceBtn = bar.createEl("button", {
+			text: "📝 활성 노트 섹션 교체",
+			cls: "bi-quick-apply-btn",
+		});
+		replaceBtn.onclick = () => this.quickApply(text, "section");
+
+		const appendBtn = bar.createEl("button", {
+			text: "➕ 활성 노트 끝에 추가",
+			cls: "bi-quick-apply-btn bi-quick-apply-append",
+		});
+		appendBtn.onclick = () => this.quickApply(text, "append");
+
+		const insertBtn = bar.createEl("button", {
+			text: "📋 커서 위치에 삽입",
+			cls: "bi-quick-apply-btn bi-quick-apply-insert",
+		});
+		insertBtn.onclick = () => {
+			const editor = this.app.workspace.activeEditor?.editor;
+			if (!editor) { new Notice("에디터가 열려있지 않습니다."); return; }
+			editor.replaceSelection(text);
+			new Notice("✅ 커서 위치에 삽입 완료");
+		};
+	}
+
+	private async quickApply(text: string, mode: "section" | "append"): Promise<void> {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) { new Notice("활성 파일이 없습니다."); return; }
+
+		try {
+			const oldContent = await this.app.vault.read(file);
+
+			if (mode === "append") {
+				const newContent = oldContent.replace(/\s*$/, "") + "\n\n" + text + "\n";
+				await this.app.vault.modify(file, newContent);
+				new Notice(`✅ ${file.basename} 끝에 추가 완료`);
+			} else {
+				// 핀된 selection 컨텍스트가 있으면 그 부분을 교체 시도
+				const selCtx = this.session.pinnedContext.find((p) => p.kind === "selection");
+				if (selCtx) {
+					const oldText = selCtx.id;
+					if (oldContent.includes(oldText)) {
+						const newContent = oldContent.replace(oldText, text);
+						await this.app.vault.modify(file, newContent);
+						new Notice(`✅ ${file.basename} 선택 영역 교체 완료`);
+						return;
+					}
+				}
+				// 교체할 영역을 못 찾으면 append로 fallback
+				const newContent = oldContent.replace(/\s*$/, "") + "\n\n" + text + "\n";
+				await this.app.vault.modify(file, newContent);
+				new Notice(`✅ ${file.basename} 끝에 추가 완료 (교체 영역 미발견)`);
+			}
+		} catch (e: any) {
+			new Notice(`❌ 적용 실패: ${e.message || e}`);
 		}
 	}
 
@@ -809,6 +878,9 @@ export class ChatView extends ItemView {
 .bi-inline-diff-skip:hover { background: var(--background-modifier-hover); }
 .bi-inline-diff-done { padding: 8px 10px; color: var(--text-success, #4c4); font-size: 12px; }
 .bi-inline-diff-skipped { padding: 8px 10px; color: var(--text-muted); font-size: 12px; }
+.bi-quick-apply-bar { display: flex; gap: 6px; padding: 6px 0; margin-top: 6px; border-top: 1px dashed var(--background-modifier-border); flex-wrap: wrap; }
+.bi-quick-apply-btn { font-size: 11px; padding: 3px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); }
+.bi-quick-apply-btn:hover { background: var(--interactive-accent); color: var(--text-on-accent); border-color: var(--interactive-accent); }
 .bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
 .bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
 .bi-slash-item:hover { background: var(--background-modifier-hover); }

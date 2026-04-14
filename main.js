@@ -1982,10 +1982,75 @@ ${t.text}`
           }
           return;
         }
+        import_obsidian8.MarkdownRenderer.render(this.app, msg.text, body, "", this);
+        this.renderQuickApplyBar(body, msg.text);
+        return;
       }
       import_obsidian8.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
     } else {
       body.setText(msg.text);
+    }
+  }
+  /**
+   * 모든 완료된 AI 응답 하단에 "활성 노트에 적용" 바를 표시.
+   * EDIT 태그나 코드블록이 없어도 항상 사용 가능.
+   */
+  renderQuickApplyBar(container, text) {
+    const bar = container.createDiv({ cls: "bi-quick-apply-bar" });
+    const replaceBtn = bar.createEl("button", {
+      text: "\u{1F4DD} \uD65C\uC131 \uB178\uD2B8 \uC139\uC158 \uAD50\uCCB4",
+      cls: "bi-quick-apply-btn"
+    });
+    replaceBtn.onclick = () => this.quickApply(text, "section");
+    const appendBtn = bar.createEl("button", {
+      text: "\u2795 \uD65C\uC131 \uB178\uD2B8 \uB05D\uC5D0 \uCD94\uAC00",
+      cls: "bi-quick-apply-btn bi-quick-apply-append"
+    });
+    appendBtn.onclick = () => this.quickApply(text, "append");
+    const insertBtn = bar.createEl("button", {
+      text: "\u{1F4CB} \uCEE4\uC11C \uC704\uCE58\uC5D0 \uC0BD\uC785",
+      cls: "bi-quick-apply-btn bi-quick-apply-insert"
+    });
+    insertBtn.onclick = () => {
+      var _a;
+      const editor = (_a = this.app.workspace.activeEditor) == null ? void 0 : _a.editor;
+      if (!editor) {
+        new import_obsidian8.Notice("\uC5D0\uB514\uD130\uAC00 \uC5F4\uB824\uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+        return;
+      }
+      editor.replaceSelection(text);
+      new import_obsidian8.Notice("\u2705 \uCEE4\uC11C \uC704\uCE58\uC5D0 \uC0BD\uC785 \uC644\uB8CC");
+    };
+  }
+  async quickApply(text, mode) {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      new import_obsidian8.Notice("\uD65C\uC131 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    try {
+      const oldContent = await this.app.vault.read(file);
+      if (mode === "append") {
+        const newContent = oldContent.replace(/\s*$/, "") + "\n\n" + text + "\n";
+        await this.app.vault.modify(file, newContent);
+        new import_obsidian8.Notice(`\u2705 ${file.basename} \uB05D\uC5D0 \uCD94\uAC00 \uC644\uB8CC`);
+      } else {
+        const selCtx = this.session.pinnedContext.find((p) => p.kind === "selection");
+        if (selCtx) {
+          const oldText = selCtx.id;
+          if (oldContent.includes(oldText)) {
+            const newContent2 = oldContent.replace(oldText, text);
+            await this.app.vault.modify(file, newContent2);
+            new import_obsidian8.Notice(`\u2705 ${file.basename} \uC120\uD0DD \uC601\uC5ED \uAD50\uCCB4 \uC644\uB8CC`);
+            return;
+          }
+        }
+        const newContent = oldContent.replace(/\s*$/, "") + "\n\n" + text + "\n";
+        await this.app.vault.modify(file, newContent);
+        new import_obsidian8.Notice(`\u2705 ${file.basename} \uB05D\uC5D0 \uCD94\uAC00 \uC644\uB8CC (\uAD50\uCCB4 \uC601\uC5ED \uBBF8\uBC1C\uACAC)`);
+      }
+    } catch (e) {
+      new import_obsidian8.Notice(`\u274C \uC801\uC6A9 \uC2E4\uD328: ${e.message || e}`);
     }
   }
   /**
@@ -2307,6 +2372,9 @@ ${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
 .bi-inline-diff-skip:hover { background: var(--background-modifier-hover); }
 .bi-inline-diff-done { padding: 8px 10px; color: var(--text-success, #4c4); font-size: 12px; }
 .bi-inline-diff-skipped { padding: 8px 10px; color: var(--text-muted); font-size: 12px; }
+.bi-quick-apply-bar { display: flex; gap: 6px; padding: 6px 0; margin-top: 6px; border-top: 1px dashed var(--background-modifier-border); flex-wrap: wrap; }
+.bi-quick-apply-btn { font-size: 11px; padding: 3px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); }
+.bi-quick-apply-btn:hover { background: var(--interactive-accent); color: var(--text-on-accent); border-color: var(--interactive-accent); }
 .bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
 .bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
 .bi-slash-item:hover { background: var(--background-modifier-hover); }
