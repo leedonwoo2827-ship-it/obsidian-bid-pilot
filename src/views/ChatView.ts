@@ -587,10 +587,24 @@ export class ChatView extends ItemView {
 			const f = this.app.vault.getAbstractFileByPath(targetPath);
 			return f instanceof TFile ? f : null;
 		}
-		// 2) getActiveFile (에디터가 포커스일 때)
+		// 2) 핀된 selection의 sourcePath (파일 경로가 기록된 경우)
+		const selCtx = this.session.pinnedContext.find(
+			(p) => p.kind === "selection" && p.sourcePath
+		);
+		if (selCtx?.sourcePath) {
+			const f = this.app.vault.getAbstractFileByPath(selCtx.sourcePath);
+			if (f instanceof TFile) return f;
+		}
+		// 3) 핀된 note의 경로
+		const noteCtx = this.session.pinnedContext.find((p) => p.kind === "note");
+		if (noteCtx) {
+			const f = this.app.vault.getAbstractFileByPath(noteCtx.id);
+			if (f instanceof TFile) return f;
+		}
+		// 4) getActiveFile (에디터가 포커스일 때)
 		const active = this.app.workspace.getActiveFile();
 		if (active) return active;
-		// 3) fallback: 마크다운 뷰 leaf 중 가장 최근 활성화된 것
+		// 5) fallback: 마크다운 뷰 leaf 중 가장 최근 활성화된 것
 		const leaves = this.app.workspace.getLeavesOfType("markdown");
 		for (const leaf of leaves) {
 			const file = (leaf.view as any)?.file;
@@ -631,11 +645,12 @@ export class ChatView extends ItemView {
 	// ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
 
 	/** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
-	receiveSelectionAsContext(text: string, label: string): void {
+	receiveSelectionAsContext(text: string, label: string, sourcePath?: string): void {
 		const ref: ContextRef = {
-			id: text.slice(0, 2000), // id에 텍스트 자체 저장 (selection 타입)
+			id: text.slice(0, 2000),
 			label: `✂️ ${label} (${text.length}자)`,
 			kind: "selection",
+			sourcePath,
 		};
 		// 중복 방지
 		if (!this.session.pinnedContext.some((p) => p.id === ref.id)) {

@@ -11,6 +11,8 @@ export interface ContextRef {
 	label: string;
 	/** 컨텍스트 종류 */
 	kind: "note" | "folder" | "selection" | "youtube" | "graph";
+	/** selection 종류일 때 원본 파일 경로 (적용 시 대상 파일 결정용) */
+	sourcePath?: string;
 }
 
 export interface UiMessage {

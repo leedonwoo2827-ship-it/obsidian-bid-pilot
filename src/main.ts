@@ -83,7 +83,7 @@ export default class BidIntelligencePlugin extends Plugin {
 				if (!sel) { new Notice("텍스트를 먼저 선택하세요."); return; }
 				await this.activateView(VIEW_TYPE_CHAT, "right");
 				const view = this.getChatView();
-				if (view) view.receiveSelectionAsContext(sel, ctx.file?.basename ?? "선택");
+				if (view) view.receiveSelectionAsContext(sel, ctx.file?.basename ?? "선택", ctx.file?.path);
 			},
 		});
 

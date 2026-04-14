@@ -2112,6 +2112,20 @@ ${t.text}`
       const f = this.app.vault.getAbstractFileByPath(targetPath);
       return f instanceof import_obsidian8.TFile ? f : null;
     }
+    const selCtx = this.session.pinnedContext.find(
+      (p) => p.kind === "selection" && p.sourcePath
+    );
+    if (selCtx == null ? void 0 : selCtx.sourcePath) {
+      const f = this.app.vault.getAbstractFileByPath(selCtx.sourcePath);
+      if (f instanceof import_obsidian8.TFile)
+        return f;
+    }
+    const noteCtx = this.session.pinnedContext.find((p) => p.kind === "note");
+    if (noteCtx) {
+      const f = this.app.vault.getAbstractFileByPath(noteCtx.id);
+      if (f instanceof import_obsidian8.TFile)
+        return f;
+    }
     const active = this.app.workspace.getActiveFile();
     if (active)
       return active;
@@ -2160,12 +2174,12 @@ ${t.text}`
   }
   // ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
   /** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
-  receiveSelectionAsContext(text, label) {
+  receiveSelectionAsContext(text, label, sourcePath) {
     const ref = {
       id: text.slice(0, 2e3),
-      // id에 텍스트 자체 저장 (selection 타입)
       label: `\u2702\uFE0F ${label} (${text.length}\uC790)`,
-      kind: "selection"
+      kind: "selection",
+      sourcePath
     };
     if (!this.session.pinnedContext.some((p) => p.id === ref.id)) {
       this.session.pinnedContext.push(ref);
@@ -3136,7 +3150,7 @@ var BidIntelligencePlugin = class extends import_obsidian13.Plugin {
       id: "pin-selection-as-context",
       name: "\uC120\uD0DD \uC601\uC5ED\uC744 \uCEE8\uD14D\uC2A4\uD2B8\uB85C \uD540",
       editorCallback: async (editor, ctx) => {
-        var _a, _b;
+        var _a, _b, _c;
         const sel = editor.getSelection();
         if (!sel) {
           new import_obsidian13.Notice("\uD14D\uC2A4\uD2B8\uB97C \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
@@ -3145,7 +3159,7 @@ var BidIntelligencePlugin = class extends import_obsidian13.Plugin {
         await this.activateView(VIEW_TYPE_CHAT, "right");
         const view = this.getChatView();
         if (view)
-          view.receiveSelectionAsContext(sel, (_b = (_a = ctx.file) == null ? void 0 : _a.basename) != null ? _b : "\uC120\uD0DD");
+          view.receiveSelectionAsContext(sel, (_b = (_a = ctx.file) == null ? void 0 : _a.basename) != null ? _b : "\uC120\uD0DD", (_c = ctx.file) == null ? void 0 : _c.path);
       }
     });
     this.addCommand({
