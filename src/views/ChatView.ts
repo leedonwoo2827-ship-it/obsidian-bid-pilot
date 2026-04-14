@@ -11,7 +11,6 @@ import type BidIntelligencePlugin from "../main";
 import { ChatSession, type ContextRef, type UiMessage } from "../utils/chatSession";
 import { buildContextBlock, buildRagBlock, activeFileRef } from "../utils/contextBuilder";
 import { extractVideoId, fetchYoutubeTranscript } from "../utils/youtube";
-import { captureGraphBase64 } from "../utils/graphCapture";
 import type { ChatMessage, GeminiToolDeclaration } from "../utils/gemini";
 import type { McpTool } from "../utils/mcpClient";
 import { ApplyEditModal, parseEditProposals } from "./ApplyEditModal";
@@ -93,13 +92,6 @@ export class ChatView extends ItemView {
 		});
 		pinActiveBtn.onclick = () => this.pinActiveFile();
 
-		const graphBtn = actions.createEl("button", {
-			text: "🕸️ 그래프",
-			cls: "bi-chat-btn",
-		});
-		graphBtn.title = "활성 그래프 뷰를 이미지로 캡처";
-		graphBtn.onclick = () => this.attachGraph();
-
 		const clearBtn = actions.createEl("button", { text: "🗑️", cls: "bi-chat-btn" });
 		clearBtn.title = "대화 초기화";
 		clearBtn.onclick = () => {
@@ -150,18 +142,6 @@ export class ChatView extends ItemView {
 		}
 		this.session.togglePin(ref);
 		this.renderPins();
-	}
-
-	attachGraph(): void {
-		const captured = captureGraphBase64(this.app);
-		if (!captured) return;
-		this.pendingAttachments.push({
-			mimeType: "image/png",
-			base64: captured.base64,
-			label: `그래프 (${captured.viewType})`,
-		});
-		new Notice("그래프 이미지를 다음 전송에 첨부합니다.");
-		this.renderAttachQueue();
 	}
 
 	private async attachYoutube(url: string): Promise<void> {
