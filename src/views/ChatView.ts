@@ -18,7 +18,7 @@ import {
 } from "../utils/imageUtils";
 import type { ChatMessage, GeminiToolDeclaration } from "../utils/gemini";
 import type { McpTool } from "../utils/mcpClient";
-import { ApplyEditModal, parseEditProposals } from "./ApplyEditModal";
+import { parseEditProposals, type EditProposal } from "./ApplyEditModal";
 import { loadGuardrails } from "../utils/guardrails";
 
 const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 분석 전문가입니다.
@@ -435,25 +435,113 @@ export class ChatView extends ItemView {
 	private renderBody(body: HTMLElement, msg: UiMessage): void {
 		body.empty();
 		if (msg.role === "assistant") {
-			MarkdownRenderer.render(this.app, msg.text || "…", body, "", this as unknown as Component);
-			// 스트리밍이 끝난(assistant pending=false) 메시지에서만 Apply 버튼 주입
+			// EDIT 블록을 인라인 diff 카드로 교체해서 렌더링
 			if (!msg.pending) {
 				const proposals = parseEditProposals(msg.text);
 				if (proposals.length > 0) {
-					const actions = body.createDiv({ cls: "bi-chat-edit-actions" });
-					proposals.forEach((p, idx) => {
-						const btn = actions.createEl("button", {
-							text: `📝 ${p.targetPath || "활성 파일"} 에 적용 (${idx + 1}/${proposals.length})`,
-							cls: "bi-chat-apply-btn",
-						});
-						btn.onclick = () => {
-							new ApplyEditModal(this.app, p).open();
-						};
-					});
+					// EDIT 태그 바깥 텍스트만 마크다운으로 렌더
+					const cleaned = msg.text.replace(/<<<EDIT[^>]*>>>[\s\S]*?<<<END_EDIT>>>/g, "").trim();
+					if (cleaned) {
+						MarkdownRenderer.render(this.app, cleaned, body, "", this as unknown as Component);
+					}
+					// 각 제안을 인라인 diff 카드로 표시
+					for (const p of proposals) {
+						this.renderInlineDiff(body, p);
+					}
+					return;
 				}
 			}
+			MarkdownRenderer.render(this.app, msg.text || "…", body, "", this as unknown as Component);
 		} else {
 			body.setText(msg.text);
+		}
+	}
+
+	/**
+	 * smart-composer 스타일 인라인 diff 카드.
+	 * 제안 내용을 채팅 메시지 안에 직접 보여주고 적용/패스 버튼 제공.
+	 */
+	private renderInlineDiff(container: HTMLElement, proposal: EditProposal): void {
+		const card = container.createDiv({ cls: "bi-inline-diff" });
+
+		// 헤더: 대상 파일명 + 모드
+		const header = card.createDiv({ cls: "bi-inline-diff-header" });
+		const targetLabel = proposal.targetPath || "활성 파일";
+		const modeMap: Record<string, string> = { replace: "전체 교체", append: "끝에 추가", section: "섹션 교체" };
+		const modeLabel = modeMap[proposal.mode ?? "replace"] ?? "교체";
+		header.createEl("span", { text: `📝 ${targetLabel}`, cls: "bi-inline-diff-target" });
+		header.createEl("span", { text: modeLabel, cls: "bi-inline-diff-mode" });
+		if (proposal.sectionHeading) {
+			header.createEl("span", { text: `→ ${proposal.sectionHeading}`, cls: "bi-inline-diff-section" });
+		}
+
+		// 제안 내용 미리보기
+		const preview = card.createDiv({ cls: "bi-inline-diff-content" });
+		MarkdownRenderer.render(
+			this.app,
+			proposal.proposedContent.length > 500
+				? proposal.proposedContent.slice(0, 500) + "\n\n…(더보기는 적용 클릭)"
+				: proposal.proposedContent,
+			preview, "", this as unknown as Component
+		);
+
+		// 버튼 행: 적용 / 패스
+		const btnRow = card.createDiv({ cls: "bi-inline-diff-buttons" });
+
+		const applyBtn = btnRow.createEl("button", { text: "✅ 적용", cls: "bi-inline-diff-apply" });
+		applyBtn.onclick = async () => {
+			try {
+				const file = proposal.targetPath
+					? this.app.vault.getAbstractFileByPath(proposal.targetPath)
+					: this.app.workspace.getActiveFile();
+				if (!file || !(file instanceof TFile)) {
+					new Notice("❌ 대상 파일을 찾지 못했습니다.");
+					return;
+				}
+				const oldContent = await this.app.vault.read(file);
+				const newContent = this.computeNewContent(oldContent, proposal);
+				await this.app.vault.modify(file, newContent);
+				new Notice(`✅ ${file.basename} 업데이트 완료`);
+				card.empty();
+				card.createEl("div", { text: `✅ ${file.basename} 적용 완료`, cls: "bi-inline-diff-done" });
+			} catch (e: any) {
+				new Notice(`❌ 적용 실패: ${e.message || e}`);
+			}
+		};
+
+		const skipBtn = btnRow.createEl("button", { text: "⏭️ 패스", cls: "bi-inline-diff-skip" });
+		skipBtn.onclick = () => {
+			card.empty();
+			card.createEl("div", { text: "⏭️ 패스됨", cls: "bi-inline-diff-skipped" });
+		};
+	}
+
+	private computeNewContent(oldContent: string, proposal: EditProposal): string {
+		const mode = proposal.mode ?? "replace";
+		switch (mode) {
+			case "append":
+				return oldContent.replace(/\s*$/, "") + "\n\n" + proposal.proposedContent + "\n";
+			case "section": {
+				const heading = proposal.sectionHeading ?? "";
+				if (!heading) return oldContent + "\n\n" + proposal.proposedContent;
+				const hMatch = heading.match(/^(#{1,6})\s+/);
+				if (!hMatch) return oldContent + "\n\n" + proposal.proposedContent;
+				const level = hMatch[1].length;
+				const lines = oldContent.split(/\r?\n/);
+				let start = lines.findIndex((l) => l.trim() === heading.trim());
+				if (start === -1) return oldContent + "\n\n" + proposal.proposedContent;
+				let end = lines.length;
+				for (let i = start + 1; i < lines.length; i++) {
+					const m = lines[i].match(/^(#{1,6})\s+/);
+					if (m && m[1].length <= level) { end = i; break; }
+				}
+				const before = lines.slice(0, start).join("\n");
+				const after = lines.slice(end).join("\n");
+				return [before, proposal.proposedContent.trim(), after].filter(Boolean).join("\n\n");
+			}
+			case "replace":
+			default:
+				return proposal.proposedContent;
 		}
 	}
 
@@ -713,7 +801,20 @@ export class ChatView extends ItemView {
 .bi-chat-send:disabled, .bi-chat-stop:disabled { opacity: 0.4; cursor: not-allowed; }
 .bi-chat-edit-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--background-modifier-border); }
 .bi-chat-apply-btn { font-size: 11px; padding: 4px 8px; cursor: pointer; text-align: left; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 4px; }
-.bi-chat-apply-btn:hover { background: var(--interactive-accent-hover); }
+.bi-inline-diff { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px 0; overflow: hidden; }
+.bi-inline-diff-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--background-secondary); font-size: 11px; }
+.bi-inline-diff-target { font-weight: 600; color: var(--text-accent); }
+.bi-inline-diff-mode { background: var(--background-modifier-hover); padding: 1px 6px; border-radius: 3px; }
+.bi-inline-diff-section { color: var(--text-muted); }
+.bi-inline-diff-content { padding: 8px 10px; max-height: 200px; overflow-y: auto; font-size: 12px; line-height: 1.5; background: var(--background-primary-alt); border-left: 3px solid var(--text-success, #4c4); }
+.bi-inline-diff-content p { margin: 4px 0; }
+.bi-inline-diff-buttons { display: flex; gap: 6px; padding: 6px 10px; background: var(--background-secondary); }
+.bi-inline-diff-apply { background: var(--interactive-accent); color: var(--text-on-accent); border: none; padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.bi-inline-diff-apply:hover { background: var(--interactive-accent-hover); }
+.bi-inline-diff-skip { background: transparent; border: 1px solid var(--background-modifier-border); padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; color: var(--text-muted); }
+.bi-inline-diff-skip:hover { background: var(--background-modifier-hover); }
+.bi-inline-diff-done { padding: 8px 10px; color: var(--text-success, #4c4); font-size: 12px; }
+.bi-inline-diff-skipped { padding: 8px 10px; color: var(--text-muted); font-size: 12px; }
 .bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
 .bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
 .bi-slash-item:hover { background: var(--background-modifier-hover); }

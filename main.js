@@ -1544,208 +1544,6 @@ function formatBytes(bytes) {
 
 // src/views/ApplyEditModal.ts
 var import_obsidian6 = require("obsidian");
-
-// src/utils/diffView.ts
-function lineDiff(oldText, newText) {
-  const a = oldText.split(/\r?\n/);
-  const b = newText.split(/\r?\n/);
-  const m = a.length;
-  const n = b.length;
-  const dp = Array.from(
-    { length: m + 1 },
-    () => new Array(n + 1).fill(0)
-  );
-  for (let i2 = 0; i2 < m; i2++) {
-    for (let j2 = 0; j2 < n; j2++) {
-      dp[i2 + 1][j2 + 1] = a[i2] === b[j2] ? dp[i2][j2] + 1 : Math.max(dp[i2 + 1][j2], dp[i2][j2 + 1]);
-    }
-  }
-  const ops = [];
-  let i = m;
-  let j = n;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      ops.push({ kind: "eq", text: a[i - 1] });
-      i--;
-      j--;
-    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-      ops.push({ kind: "del", text: a[i - 1] });
-      i--;
-    } else {
-      ops.push({ kind: "add", text: b[j - 1] });
-      j--;
-    }
-  }
-  while (i > 0) {
-    ops.push({ kind: "del", text: a[--i] });
-  }
-  while (j > 0) {
-    ops.push({ kind: "add", text: b[--j] });
-  }
-  return ops.reverse();
-}
-function renderDiff(ops, container) {
-  container.empty();
-  container.addClass("bi-diff");
-  const pre = container.createEl("pre", { cls: "bi-diff-pre" });
-  const contextLines = 3;
-  const changedIndices = /* @__PURE__ */ new Set();
-  for (let idx = 0; idx < ops.length; idx++) {
-    if (ops[idx].kind !== "eq")
-      changedIndices.add(idx);
-  }
-  const showIdx = /* @__PURE__ */ new Set();
-  for (const idx of changedIndices) {
-    for (let k = Math.max(0, idx - contextLines); k <= Math.min(ops.length - 1, idx + contextLines); k++) {
-      showIdx.add(k);
-    }
-  }
-  const sorted = Array.from(showIdx).sort((a, b) => a - b);
-  let prev = -2;
-  for (const idx of sorted) {
-    if (idx > prev + 1) {
-      pre.createEl("div", { text: "\u2026", cls: "bi-diff-sep" });
-    }
-    const op = ops[idx];
-    const line = pre.createEl("div", { cls: `bi-diff-line bi-diff-${op.kind}` });
-    const marker = op.kind === "add" ? "+ " : op.kind === "del" ? "- " : "  ";
-    line.setText(marker + op.text);
-    prev = idx;
-  }
-  if (changedIndices.size === 0) {
-    pre.createEl("div", { text: "(\uBCC0\uACBD \uC0AC\uD56D \uC5C6\uC74C)", cls: "bi-diff-sep" });
-  }
-}
-function injectDiffStyle() {
-  if (document.getElementById("bi-diff-style"))
-    return;
-  const style = document.createElement("style");
-  style.id = "bi-diff-style";
-  style.textContent = `
-.bi-diff-pre { font-family: var(--font-monospace); font-size: 12px; max-height: 400px; overflow: auto; padding: 8px; background: var(--background-secondary); margin: 0; }
-.bi-diff-line { white-space: pre-wrap; }
-.bi-diff-add { background: rgba(80, 200, 120, 0.15); color: var(--text-success, #2f7); }
-.bi-diff-del { background: rgba(230, 80, 80, 0.15); color: var(--text-error, #e55); text-decoration: line-through; }
-.bi-diff-eq { color: var(--text-muted); }
-.bi-diff-sep { color: var(--text-muted); padding: 2px 0; text-align: center; }
-`;
-  document.head.appendChild(style);
-}
-
-// src/views/ApplyEditModal.ts
-var ApplyEditModal = class extends import_obsidian6.Modal {
-  constructor(app, proposal, onApplied) {
-    super(app);
-    this.proposal = proposal;
-    this.onApplied = onApplied;
-  }
-  async onOpen() {
-    var _a;
-    injectDiffStyle();
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl("h3", { text: "\u{1F4DD} \uD3B8\uC9D1 \uC81C\uC548 \uAC80\uD1A0" });
-    const file = this.resolveFile();
-    if (!file) {
-      contentEl.createEl("p", {
-        text: "\u274C \uB300\uC0C1 \uD30C\uC77C\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: " + (this.proposal.targetPath || "(\uD65C\uC131 \uD30C\uC77C \uC5C6\uC74C)")
-      });
-      return;
-    }
-    const oldContent = await this.app.vault.read(file);
-    const newContent = this.computeNewContent(oldContent);
-    const info = contentEl.createDiv({ cls: "bi-apply-info" });
-    info.createEl("strong", { text: "\uB300\uC0C1: " });
-    info.createEl("code", { text: file.path });
-    info.createEl("span", {
-      text: ` (${(_a = this.proposal.mode) != null ? _a : "replace"} \uBAA8\uB4DC)`
-    });
-    const diffContainer = contentEl.createDiv();
-    renderDiff(lineDiff(oldContent, newContent), diffContainer);
-    const btnRow = contentEl.createDiv({ cls: "bi-apply-buttons" });
-    btnRow.style.display = "flex";
-    btnRow.style.gap = "8px";
-    btnRow.style.marginTop = "12px";
-    btnRow.style.justifyContent = "flex-end";
-    const cancel = btnRow.createEl("button", { text: "\uCDE8\uC18C" });
-    cancel.onclick = () => this.close();
-    const apply = btnRow.createEl("button", {
-      text: "\u2705 \uC801\uC6A9",
-      cls: "mod-cta"
-    });
-    apply.onclick = async () => {
-      var _a2;
-      try {
-        await this.app.vault.modify(file, newContent);
-        new import_obsidian6.Notice(`\u2705 ${file.basename} \uC5C5\uB370\uC774\uD2B8 \uC644\uB8CC`);
-        (_a2 = this.onApplied) == null ? void 0 : _a2.call(this);
-        this.close();
-      } catch (e) {
-        new import_obsidian6.Notice(`\u274C \uC801\uC6A9 \uC2E4\uD328: ${e.message || e}`);
-      }
-    };
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-  resolveFile() {
-    if (this.proposal.targetPath) {
-      const f = this.app.vault.getAbstractFileByPath(this.proposal.targetPath);
-      return f instanceof import_obsidian6.TFile ? f : null;
-    }
-    return this.app.workspace.getActiveFile();
-  }
-  computeNewContent(oldContent) {
-    var _a, _b;
-    const mode = (_a = this.proposal.mode) != null ? _a : "replace";
-    switch (mode) {
-      case "append":
-        return oldContent.replace(/\s*$/, "") + "\n\n" + this.proposal.proposedContent + "\n";
-      case "section":
-        return this.replaceSection(
-          oldContent,
-          (_b = this.proposal.sectionHeading) != null ? _b : "",
-          this.proposal.proposedContent
-        );
-      case "replace":
-      default:
-        return this.proposal.proposedContent;
-    }
-  }
-  /**
-   * 특정 헤딩부터 다음 동일/상위 헤딩 직전까지 교체.
-   * heading은 "## 섹션명" 형태 문자열. 매칭 실패 시 append로 폴백.
-   */
-  replaceSection(content, heading, replacement) {
-    if (!heading)
-      return content + "\n\n" + replacement;
-    const hMatch = heading.match(/^(#{1,6})\s+/);
-    if (!hMatch)
-      return content + "\n\n" + replacement;
-    const level = hMatch[1].length;
-    const lines = content.split(/\r?\n/);
-    let start = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].trim() === heading.trim()) {
-        start = i;
-        break;
-      }
-    }
-    if (start === -1)
-      return content + "\n\n" + replacement;
-    let end = lines.length;
-    for (let i = start + 1; i < lines.length; i++) {
-      const m = lines[i].match(/^(#{1,6})\s+/);
-      if (m && m[1].length <= level) {
-        end = i;
-        break;
-      }
-    }
-    const before = lines.slice(0, start).join("\n");
-    const after = lines.slice(end).join("\n");
-    return [before, replacement.trim(), after].filter(Boolean).join("\n\n");
-  }
-};
 function parseEditProposals(responseText) {
   var _a, _b;
   const result = [];
@@ -2152,24 +1950,106 @@ ${t.text}`
   renderBody(body, msg) {
     body.empty();
     if (msg.role === "assistant") {
-      import_obsidian8.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
       if (!msg.pending) {
         const proposals = parseEditProposals(msg.text);
         if (proposals.length > 0) {
-          const actions = body.createDiv({ cls: "bi-chat-edit-actions" });
-          proposals.forEach((p, idx) => {
-            const btn = actions.createEl("button", {
-              text: `\u{1F4DD} ${p.targetPath || "\uD65C\uC131 \uD30C\uC77C"} \uC5D0 \uC801\uC6A9 (${idx + 1}/${proposals.length})`,
-              cls: "bi-chat-apply-btn"
-            });
-            btn.onclick = () => {
-              new ApplyEditModal(this.app, p).open();
-            };
-          });
+          const cleaned = msg.text.replace(/<<<EDIT[^>]*>>>[\s\S]*?<<<END_EDIT>>>/g, "").trim();
+          if (cleaned) {
+            import_obsidian8.MarkdownRenderer.render(this.app, cleaned, body, "", this);
+          }
+          for (const p of proposals) {
+            this.renderInlineDiff(body, p);
+          }
+          return;
         }
       }
+      import_obsidian8.MarkdownRenderer.render(this.app, msg.text || "\u2026", body, "", this);
     } else {
       body.setText(msg.text);
+    }
+  }
+  /**
+   * smart-composer 스타일 인라인 diff 카드.
+   * 제안 내용을 채팅 메시지 안에 직접 보여주고 적용/패스 버튼 제공.
+   */
+  renderInlineDiff(container, proposal) {
+    var _a, _b;
+    const card = container.createDiv({ cls: "bi-inline-diff" });
+    const header = card.createDiv({ cls: "bi-inline-diff-header" });
+    const targetLabel = proposal.targetPath || "\uD65C\uC131 \uD30C\uC77C";
+    const modeMap = { replace: "\uC804\uCCB4 \uAD50\uCCB4", append: "\uB05D\uC5D0 \uCD94\uAC00", section: "\uC139\uC158 \uAD50\uCCB4" };
+    const modeLabel = (_b = modeMap[(_a = proposal.mode) != null ? _a : "replace"]) != null ? _b : "\uAD50\uCCB4";
+    header.createEl("span", { text: `\u{1F4DD} ${targetLabel}`, cls: "bi-inline-diff-target" });
+    header.createEl("span", { text: modeLabel, cls: "bi-inline-diff-mode" });
+    if (proposal.sectionHeading) {
+      header.createEl("span", { text: `\u2192 ${proposal.sectionHeading}`, cls: "bi-inline-diff-section" });
+    }
+    const preview = card.createDiv({ cls: "bi-inline-diff-content" });
+    import_obsidian8.MarkdownRenderer.render(
+      this.app,
+      proposal.proposedContent.length > 500 ? proposal.proposedContent.slice(0, 500) + "\n\n\u2026(\uB354\uBCF4\uAE30\uB294 \uC801\uC6A9 \uD074\uB9AD)" : proposal.proposedContent,
+      preview,
+      "",
+      this
+    );
+    const btnRow = card.createDiv({ cls: "bi-inline-diff-buttons" });
+    const applyBtn = btnRow.createEl("button", { text: "\u2705 \uC801\uC6A9", cls: "bi-inline-diff-apply" });
+    applyBtn.onclick = async () => {
+      try {
+        const file = proposal.targetPath ? this.app.vault.getAbstractFileByPath(proposal.targetPath) : this.app.workspace.getActiveFile();
+        if (!file || !(file instanceof import_obsidian8.TFile)) {
+          new import_obsidian8.Notice("\u274C \uB300\uC0C1 \uD30C\uC77C\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+          return;
+        }
+        const oldContent = await this.app.vault.read(file);
+        const newContent = this.computeNewContent(oldContent, proposal);
+        await this.app.vault.modify(file, newContent);
+        new import_obsidian8.Notice(`\u2705 ${file.basename} \uC5C5\uB370\uC774\uD2B8 \uC644\uB8CC`);
+        card.empty();
+        card.createEl("div", { text: `\u2705 ${file.basename} \uC801\uC6A9 \uC644\uB8CC`, cls: "bi-inline-diff-done" });
+      } catch (e) {
+        new import_obsidian8.Notice(`\u274C \uC801\uC6A9 \uC2E4\uD328: ${e.message || e}`);
+      }
+    };
+    const skipBtn = btnRow.createEl("button", { text: "\u23ED\uFE0F \uD328\uC2A4", cls: "bi-inline-diff-skip" });
+    skipBtn.onclick = () => {
+      card.empty();
+      card.createEl("div", { text: "\u23ED\uFE0F \uD328\uC2A4\uB428", cls: "bi-inline-diff-skipped" });
+    };
+  }
+  computeNewContent(oldContent, proposal) {
+    var _a, _b;
+    const mode = (_a = proposal.mode) != null ? _a : "replace";
+    switch (mode) {
+      case "append":
+        return oldContent.replace(/\s*$/, "") + "\n\n" + proposal.proposedContent + "\n";
+      case "section": {
+        const heading = (_b = proposal.sectionHeading) != null ? _b : "";
+        if (!heading)
+          return oldContent + "\n\n" + proposal.proposedContent;
+        const hMatch = heading.match(/^(#{1,6})\s+/);
+        if (!hMatch)
+          return oldContent + "\n\n" + proposal.proposedContent;
+        const level = hMatch[1].length;
+        const lines = oldContent.split(/\r?\n/);
+        let start = lines.findIndex((l) => l.trim() === heading.trim());
+        if (start === -1)
+          return oldContent + "\n\n" + proposal.proposedContent;
+        let end = lines.length;
+        for (let i = start + 1; i < lines.length; i++) {
+          const m = lines[i].match(/^(#{1,6})\s+/);
+          if (m && m[1].length <= level) {
+            end = i;
+            break;
+          }
+        }
+        const before = lines.slice(0, start).join("\n");
+        const after = lines.slice(end).join("\n");
+        return [before, proposal.proposedContent.trim(), after].filter(Boolean).join("\n\n");
+      }
+      case "replace":
+      default:
+        return proposal.proposedContent;
     }
   }
   // ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
@@ -2393,7 +2273,20 @@ ${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
 .bi-chat-send:disabled, .bi-chat-stop:disabled { opacity: 0.4; cursor: not-allowed; }
 .bi-chat-edit-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--background-modifier-border); }
 .bi-chat-apply-btn { font-size: 11px; padding: 4px 8px; cursor: pointer; text-align: left; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 4px; }
-.bi-chat-apply-btn:hover { background: var(--interactive-accent-hover); }
+.bi-inline-diff { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px 0; overflow: hidden; }
+.bi-inline-diff-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--background-secondary); font-size: 11px; }
+.bi-inline-diff-target { font-weight: 600; color: var(--text-accent); }
+.bi-inline-diff-mode { background: var(--background-modifier-hover); padding: 1px 6px; border-radius: 3px; }
+.bi-inline-diff-section { color: var(--text-muted); }
+.bi-inline-diff-content { padding: 8px 10px; max-height: 200px; overflow-y: auto; font-size: 12px; line-height: 1.5; background: var(--background-primary-alt); border-left: 3px solid var(--text-success, #4c4); }
+.bi-inline-diff-content p { margin: 4px 0; }
+.bi-inline-diff-buttons { display: flex; gap: 6px; padding: 6px 10px; background: var(--background-secondary); }
+.bi-inline-diff-apply { background: var(--interactive-accent); color: var(--text-on-accent); border: none; padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.bi-inline-diff-apply:hover { background: var(--interactive-accent-hover); }
+.bi-inline-diff-skip { background: transparent; border: 1px solid var(--background-modifier-border); padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; color: var(--text-muted); }
+.bi-inline-diff-skip:hover { background: var(--background-modifier-hover); }
+.bi-inline-diff-done { padding: 8px 10px; color: var(--text-success, #4c4); font-size: 12px; }
+.bi-inline-diff-skipped { padding: 8px 10px; color: var(--text-muted); font-size: 12px; }
 .bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
 .bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
 .bi-slash-item:hover { background: var(--background-modifier-hover); }
