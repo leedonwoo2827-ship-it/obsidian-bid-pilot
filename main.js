@@ -330,9 +330,14 @@ ${content.slice(0, 6e3)}
        * Obsidian requestUrl은 스트리밍 미지원이므로 전역 fetch + SSE 파싱 사용.
        * onChunk 콜백으로 토큰이 도착하는 즉시 호출되며, 최종 전체 텍스트를 반환.
        */
+      /**
+       * 멀티턴 생성 (비스트리밍).
+       * Obsidian Electron 환경에서 fetch ReadableStream SSE 파싱이 불안정하므로
+       * requestUrl 단발 호출 방식 사용. onChunk는 응답 전체를 한 번에 전달.
+       */
       async generateStream(messages, opts) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i;
-        const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+        const url = `${BASE_URL}/${this.model}:generateContent?key=${this.apiKey}`;
         const body = {
           contents: messages.map((m) => ({
             role: m.role,
@@ -346,47 +351,24 @@ ${content.slice(0, 6e3)}
         if (opts.systemInstruction) {
           body.systemInstruction = { parts: [{ text: opts.systemInstruction }] };
         }
-        const response = await fetch(url, {
+        const response = await (0, import_obsidian9.requestUrl)({
+          url,
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: opts.signal
+          body: JSON.stringify(body)
         });
-        if (!response.ok || !response.body) {
-          const errText = await response.text().catch(() => "");
-          console.error("[bid-intelligence] Gemini stream error:", response.status, errText.slice(0, 500));
-          throw new Error(`Gemini \uC2A4\uD2B8\uB9BC \uC624\uB958: ${response.status} ${errText.slice(0, 200)}`);
+        if (response.status !== 200) {
+          console.error("[bid-intelligence] Gemini error:", response.status, (_c = response.text) == null ? void 0 : _c.slice(0, 500));
+          throw new Error(`Gemini \uC624\uB958: ${response.status} ${(_d = response.text) == null ? void 0 : _d.slice(0, 200)}`);
         }
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buffer = "";
-        let full = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done)
-            break;
-          buffer += decoder.decode(value, { stream: true });
-          const events = buffer.split("\n\n");
-          buffer = (_c = events.pop()) != null ? _c : "";
-          for (const evt of events) {
-            const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
-            if (!dataLine)
-              continue;
-            const payload = dataLine.slice(5).trim();
-            if (!payload || payload === "[DONE]")
-              continue;
-            try {
-              const json = JSON.parse(payload);
-              const delta = (_i = (_h = (_g = (_f = (_e = (_d = json == null ? void 0 : json.candidates) == null ? void 0 : _d[0]) == null ? void 0 : _e.content) == null ? void 0 : _f.parts) == null ? void 0 : _g[0]) == null ? void 0 : _h.text) != null ? _i : "";
-              if (delta) {
-                full += delta;
-                opts.onChunk(delta);
-              }
-            } catch (e) {
-            }
-          }
+        const data = response.json;
+        const text = (_j = (_i = (_h = (_g = (_f = (_e = data == null ? void 0 : data.candidates) == null ? void 0 : _e[0]) == null ? void 0 : _f.content) == null ? void 0 : _g.parts) == null ? void 0 : _h[0]) == null ? void 0 : _i.text) != null ? _j : "";
+        if (!text) {
+          console.warn("[bid-intelligence] Gemini \uBE48 \uC751\uB2F5:", JSON.stringify(data).slice(0, 300));
+          throw new Error("Gemini \uC751\uB2F5\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
         }
-        return full;
+        opts.onChunk(text);
+        return text;
       }
       /**
        * function calling 루프 (비스트리밍).

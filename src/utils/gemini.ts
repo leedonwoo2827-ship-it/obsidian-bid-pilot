@@ -177,6 +177,11 @@ ${content.slice(0, 6000)}
 	 * Obsidian requestUrl은 스트리밍 미지원이므로 전역 fetch + SSE 파싱 사용.
 	 * onChunk 콜백으로 토큰이 도착하는 즉시 호출되며, 최종 전체 텍스트를 반환.
 	 */
+	/**
+	 * 멀티턴 생성 (비스트리밍).
+	 * Obsidian Electron 환경에서 fetch ReadableStream SSE 파싱이 불안정하므로
+	 * requestUrl 단발 호출 방식 사용. onChunk는 응답 전체를 한 번에 전달.
+	 */
 	async generateStream(
 		messages: ChatMessage[],
 		opts: {
@@ -187,7 +192,7 @@ ${content.slice(0, 6000)}
 			maxOutputTokens?: number;
 		}
 	): Promise<string> {
-		const url = `${BASE_URL}/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+		const url = `${BASE_URL}/${this.model}:generateContent?key=${this.apiKey}`;
 
 		const body: any = {
 			contents: messages.map((m) => ({
@@ -204,55 +209,27 @@ ${content.slice(0, 6000)}
 			body.systemInstruction = { parts: [{ text: opts.systemInstruction }] };
 		}
 
-		const response = await fetch(url, {
+		const response = await requestUrl({
+			url,
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
-			signal: opts.signal,
 		});
 
-		if (!response.ok || !response.body) {
-			const errText = await response.text().catch(() => "");
-			console.error("[bid-intelligence] Gemini stream error:", response.status, errText.slice(0, 500));
-			throw new Error(`Gemini 스트림 오류: ${response.status} ${errText.slice(0, 200)}`);
+		if (response.status !== 200) {
+			console.error("[bid-intelligence] Gemini error:", response.status, response.text?.slice(0, 500));
+			throw new Error(`Gemini 오류: ${response.status} ${response.text?.slice(0, 200)}`);
 		}
 
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder("utf-8");
-		let buffer = "";
-		let full = "";
-
-		while (true) {
-			const { value, done } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-
-			// SSE: 각 이벤트는 빈 줄(\n\n)로 구분, 데이터 줄은 "data: {json}" 형식
-			const events = buffer.split("\n\n");
-			buffer = events.pop() ?? "";
-
-			for (const evt of events) {
-				const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
-				if (!dataLine) continue;
-				const payload = dataLine.slice(5).trim();
-				if (!payload || payload === "[DONE]") continue;
-
-				try {
-					const json = JSON.parse(payload);
-					const delta =
-						json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-					if (delta) {
-						full += delta;
-						opts.onChunk(delta);
-					}
-				} catch {
-					// 부분 JSON이면 버퍼에 누적을 기대하지 말고 스킵
-				}
-			}
+		const data = response.json;
+		const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+		if (!text) {
+			console.warn("[bid-intelligence] Gemini 빈 응답:", JSON.stringify(data).slice(0, 300));
+			throw new Error("Gemini 응답이 비어 있습니다.");
 		}
 
-		return full;
+		opts.onChunk(text);
+		return text;
 	}
 
 	/**
