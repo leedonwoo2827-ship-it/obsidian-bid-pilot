@@ -213,6 +213,7 @@ ${content.slice(0, 6000)}
 
 		if (!response.ok || !response.body) {
 			const errText = await response.text().catch(() => "");
+			console.error("[bid-intelligence] Gemini stream error:", response.status, errText.slice(0, 500));
 			throw new Error(`Gemini 스트림 오류: ${response.status} ${errText.slice(0, 200)}`);
 		}
 

@@ -354,6 +354,7 @@ ${content.slice(0, 6e3)}
         });
         if (!response.ok || !response.body) {
           const errText = await response.text().catch(() => "");
+          console.error("[bid-intelligence] Gemini stream error:", response.status, errText.slice(0, 500));
           throw new Error(`Gemini \uC2A4\uD2B8\uB9BC \uC624\uB958: ${response.status} ${errText.slice(0, 200)}`);
         }
         const reader = response.body.getReader();
@@ -2358,6 +2359,7 @@ ${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
         });
       }
     } catch (e) {
+      console.error("[bid-intelligence] \uCC44\uD305 \uC624\uB958:", e);
       if (e.name === "AbortError") {
         assistant.text += "\n\n_(\uC911\uB2E8\uB428)_";
       } else {

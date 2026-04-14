@@ -661,6 +661,7 @@ export class ChatView extends ItemView {
 				});
 			}
 		} catch (e: any) {
+			console.error("[bid-intelligence] 채팅 오류:", e);
 			if (e.name === "AbortError") {
 				assistant.text += "\n\n_(중단됨)_";
 			} else {
