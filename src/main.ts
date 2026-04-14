@@ -76,18 +76,6 @@ export default class BidIntelligencePlugin extends Plugin {
 		// ── 채팅 연동 커맨드 ──
 
 		this.addCommand({
-			id: "send-selection-to-chat",
-			name: "선택 영역을 채팅으로 질문",
-			editorCallback: async (editor: Editor) => {
-				const sel = editor.getSelection();
-				if (!sel) { new Notice("텍스트를 먼저 선택하세요."); return; }
-				await this.activateView(VIEW_TYPE_CHAT, "right");
-				const view = this.getChatView();
-				if (view) view.receiveSelectionAsQuestion(sel);
-			},
-		});
-
-		this.addCommand({
 			id: "pin-selection-as-context",
 			name: "선택 영역을 컨텍스트로 핀",
 			editorCallback: async (editor: Editor, ctx: MarkdownView) => {

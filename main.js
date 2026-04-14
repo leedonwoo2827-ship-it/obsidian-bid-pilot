@@ -2012,13 +2012,26 @@ ${t.text}`
       return;
     }
     for (const ref of this.session.pinnedContext) {
-      const chip = this.pinsEl.createDiv({ cls: "bi-chat-chip" });
+      const row = this.pinsEl.createDiv({ cls: "bi-chat-pin-row" });
+      const chip = row.createDiv({ cls: "bi-chat-chip" });
       chip.createEl("span", { text: this.chipIcon(ref.kind) + " " + ref.label });
       const close = chip.createEl("span", { text: "\xD7", cls: "bi-chat-chip-x" });
       close.onclick = () => {
         this.session.togglePin(ref);
         this.renderPins();
       };
+      if (ref.kind === "selection") {
+        const preview = row.createDiv({ cls: "bi-chat-pin-preview" });
+        const previewText = ref.id.length > 200 ? ref.id.slice(0, 200) + "\u2026" : ref.id;
+        preview.setText(previewText);
+        preview.style.display = "block";
+        chip.style.cursor = "pointer";
+        chip.onclick = (e) => {
+          if (e.target.classList.contains("bi-chat-chip-x"))
+            return;
+          preview.style.display = preview.style.display === "none" ? "block" : "none";
+        };
+      }
     }
   }
   chipIcon(kind) {
@@ -2177,11 +2190,6 @@ ${t.text}`
     }
   }
   // ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
-  /** 선택 텍스트를 입력창에 넣고 즉시 전송 */
-  receiveSelectionAsQuestion(text) {
-    this.inputEl.value = text;
-    this.handleSend();
-  }
   /** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
   receiveSelectionAsContext(text, label) {
     const ref = {
@@ -2381,6 +2389,8 @@ ${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
 .bi-chat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; background: var(--background-secondary); border-radius: 10px; font-size: 11px; }
 .bi-chat-chip-x { cursor: pointer; color: var(--text-muted); font-weight: bold; }
 .bi-chat-chip-x:hover { color: var(--text-error); }
+.bi-chat-pin-row { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.bi-chat-pin-preview { font-size: 11px; color: var(--text-muted); background: var(--background-primary-alt); padding: 4px 8px; border-radius: 4px; white-space: pre-wrap; max-height: 120px; overflow-y: auto; border-left: 2px solid var(--text-accent); }
 .bi-chat-messages { flex: 1; overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 10px; }
 .bi-chat-empty { color: var(--text-muted); text-align: center; padding: 20px; font-size: 12px; }
 .bi-chat-msg { border-radius: 6px; padding: 6px 8px; }
@@ -3135,21 +3145,6 @@ var BidIntelligencePlugin = class extends import_obsidian13.Plugin {
       id: "index-vault",
       name: "\uCEE8\uD14D\uC2A4\uD2B8 \uBCFC\uD2B8 \uC7AC\uC778\uB371\uC2F1 (RAG)",
       callback: () => this.indexVault()
-    });
-    this.addCommand({
-      id: "send-selection-to-chat",
-      name: "\uC120\uD0DD \uC601\uC5ED\uC744 \uCC44\uD305\uC73C\uB85C \uC9C8\uBB38",
-      editorCallback: async (editor) => {
-        const sel = editor.getSelection();
-        if (!sel) {
-          new import_obsidian13.Notice("\uD14D\uC2A4\uD2B8\uB97C \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
-          return;
-        }
-        await this.activateView(VIEW_TYPE_CHAT, "right");
-        const view = this.getChatView();
-        if (view)
-          view.receiveSelectionAsQuestion(sel);
-      }
     });
     this.addCommand({
       id: "pin-selection-as-context",

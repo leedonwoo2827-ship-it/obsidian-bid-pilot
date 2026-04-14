@@ -257,13 +257,29 @@ export class ChatView extends ItemView {
 			return;
 		}
 		for (const ref of this.session.pinnedContext) {
-			const chip = this.pinsEl.createDiv({ cls: "bi-chat-chip" });
+			const row = this.pinsEl.createDiv({ cls: "bi-chat-pin-row" });
+			const chip = row.createDiv({ cls: "bi-chat-chip" });
 			chip.createEl("span", { text: this.chipIcon(ref.kind) + " " + ref.label });
 			const close = chip.createEl("span", { text: "×", cls: "bi-chat-chip-x" });
 			close.onclick = () => {
 				this.session.togglePin(ref);
 				this.renderPins();
 			};
+
+			// selection 타입이면 텍스트 미리보기 표시 (접고 펼칠 수 있음)
+			if (ref.kind === "selection") {
+				const preview = row.createDiv({ cls: "bi-chat-pin-preview" });
+				const previewText = ref.id.length > 200
+					? ref.id.slice(0, 200) + "…"
+					: ref.id;
+				preview.setText(previewText);
+				preview.style.display = "block";
+				chip.style.cursor = "pointer";
+				chip.onclick = (e) => {
+					if ((e.target as HTMLElement).classList.contains("bi-chat-chip-x")) return;
+					preview.style.display = preview.style.display === "none" ? "block" : "none";
+				};
+			}
 		}
 	}
 
@@ -442,12 +458,6 @@ export class ChatView extends ItemView {
 	}
 
 	// ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
-
-	/** 선택 텍스트를 입력창에 넣고 즉시 전송 */
-	receiveSelectionAsQuestion(text: string): void {
-		this.inputEl.value = text;
-		this.handleSend();
-	}
 
 	/** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
 	receiveSelectionAsContext(text: string, label: string): void {
@@ -682,6 +692,8 @@ export class ChatView extends ItemView {
 .bi-chat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; background: var(--background-secondary); border-radius: 10px; font-size: 11px; }
 .bi-chat-chip-x { cursor: pointer; color: var(--text-muted); font-weight: bold; }
 .bi-chat-chip-x:hover { color: var(--text-error); }
+.bi-chat-pin-row { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.bi-chat-pin-preview { font-size: 11px; color: var(--text-muted); background: var(--background-primary-alt); padding: 4px 8px; border-radius: 4px; white-space: pre-wrap; max-height: 120px; overflow-y: auto; border-left: 2px solid var(--text-accent); }
 .bi-chat-messages { flex: 1; overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 10px; }
 .bi-chat-empty { color: var(--text-muted); text-align: center; padding: 20px; font-size: 12px; }
 .bi-chat-msg { border-radius: 6px; padding: 6px 8px; }
