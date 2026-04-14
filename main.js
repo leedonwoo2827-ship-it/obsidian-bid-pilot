@@ -1828,7 +1828,7 @@ var DEFAULT_CHAT_SYSTEM_PROMPT = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\u
 mode \uAC12: replace(\uC804\uCCB4 \uAD50\uCCB4) / append(\uB05D\uC5D0 \uCD94\uAC00) / section(\uC139\uC158 \uAD50\uCCB4).
 target\uC744 \uC0DD\uB7B5\uD558\uBA74 \uD65C\uC131 \uD30C\uC77C\uC5D0 \uC801\uC6A9\uB429\uB2C8\uB2E4.
 \uC774 \uD0DC\uADF8 \uBC16\uC5D0\uB3C4 \uC124\uBA85\uC744 \uC790\uC720\uB86D\uAC8C \uC4F8 \uC218 \uC788\uC73C\uB098, \uC2E4\uC81C \uC801\uC6A9 \uB300\uC0C1\uC740 \uBC18\uB4DC\uC2DC \uD0DC\uADF8 \uC548\uC5D0\uB9CC \uB123\uC2B5\uB2C8\uB2E4.`;
-var ChatView = class extends import_obsidian8.ItemView {
+var _ChatView = class _ChatView extends import_obsidian8.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.session = new ChatSession();
@@ -1836,6 +1836,7 @@ var ChatView = class extends import_obsidian8.ItemView {
     /** 다음 전송에 첨부할 이미지/텍스트 큐 */
     this.pendingAttachments = [];
     this.pendingPrefetched = [];
+    this.slashSuggestEl = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -1913,6 +1914,7 @@ var ChatView = class extends import_obsidian8.ItemView {
       return (_a = this.abortCtrl) == null ? void 0 : _a.abort();
     };
     this.stopBtn.disabled = true;
+    this.setupSlashSuggest();
     this.injectStyle();
   }
   pinActiveFile() {
@@ -2022,6 +2024,95 @@ ${t.text}`
   chipIcon(kind) {
     return { note: "\u{1F4C4}", folder: "\u{1F4C1}", selection: "\u2702\uFE0F", youtube: "\u25B6\uFE0F", graph: "\u{1F578}\uFE0F" }[kind];
   }
+  /**
+   * 슬래시 커맨드 처리. 처리했으면 true, 아니면 false(일반 메시지로 전송).
+   */
+  handleSlashCommand(input) {
+    const lower = input.toLowerCase().trim();
+    if (lower === "/clear") {
+      this.clearChat();
+      new import_obsidian8.Notice("\uCC44\uD305 \uCD08\uAE30\uD654 \uC644\uB8CC");
+      return true;
+    }
+    if (lower === "/model flash") {
+      this.plugin.settings.geminiModel = "gemini-2.5-flash";
+      void this.plugin.saveSettings();
+      new import_obsidian8.Notice("\uBAA8\uB378 \uC804\uD658: gemini-2.5-flash");
+      return true;
+    }
+    if (lower === "/model pro") {
+      this.plugin.settings.geminiModel = "gemini-2.5-pro";
+      void this.plugin.saveSettings();
+      new import_obsidian8.Notice("\uBAA8\uB378 \uC804\uD658: gemini-2.5-pro");
+      return true;
+    }
+    if (lower === "/model lite") {
+      this.plugin.settings.geminiModel = "gemini-2.5-flash-lite";
+      void this.plugin.saveSettings();
+      new import_obsidian8.Notice("\uBAA8\uB378 \uC804\uD658: gemini-2.5-flash-lite");
+      return true;
+    }
+    if (lower === "/pin") {
+      this.pinActiveFile();
+      return true;
+    }
+    if (lower.startsWith("/topk")) {
+      const n = parseInt(lower.replace("/topk", "").trim(), 10);
+      if (Number.isFinite(n) && n > 0) {
+        this.plugin.settings.ragTopK = n;
+        void this.plugin.saveSettings();
+        new import_obsidian8.Notice(`RAG Top K \u2192 ${n}`);
+      } else {
+        new import_obsidian8.Notice(`\uD604\uC7AC Top K: ${this.plugin.settings.ragTopK} (\uBCC0\uACBD: /topk \uC22B\uC790)`);
+      }
+      return true;
+    }
+    return false;
+  }
+  /**
+   * 입력창에 "/" 입력 시 자동완성 드롭다운 표시.
+   */
+  setupSlashSuggest() {
+    this.inputEl.addEventListener("input", () => {
+      const val = this.inputEl.value;
+      if (val.startsWith("/") && val.length <= 15) {
+        this.showSlashSuggest(val.toLowerCase());
+      } else {
+        this.hideSlashSuggest();
+      }
+    });
+  }
+  showSlashSuggest(partial) {
+    var _a;
+    if (!this.slashSuggestEl) {
+      this.slashSuggestEl = document.createElement("div");
+      this.slashSuggestEl.addClass("bi-slash-suggest");
+      (_a = this.inputEl.parentElement) == null ? void 0 : _a.insertBefore(this.slashSuggestEl, this.inputEl);
+    }
+    this.slashSuggestEl.empty();
+    const matches = _ChatView.SLASH_COMMANDS.filter(
+      (c) => c.cmd.startsWith(partial) || partial === "/"
+    );
+    if (matches.length === 0) {
+      this.hideSlashSuggest();
+      return;
+    }
+    this.slashSuggestEl.style.display = "block";
+    for (const m of matches) {
+      const row = this.slashSuggestEl.createDiv({ cls: "bi-slash-item" });
+      row.createEl("span", { text: m.cmd, cls: "bi-slash-cmd" });
+      row.createEl("span", { text: ` \u2014 ${m.desc}`, cls: "bi-slash-desc" });
+      row.onclick = () => {
+        this.inputEl.value = m.cmd + " ";
+        this.inputEl.focus();
+        this.hideSlashSuggest();
+      };
+    }
+  }
+  hideSlashSuggest() {
+    if (this.slashSuggestEl)
+      this.slashSuggestEl.style.display = "none";
+  }
   findYoutubeUrls(text) {
     const urls = [];
     const re = /(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+)/gi;
@@ -2085,15 +2176,56 @@ ${t.text}`
       body.setText(msg.text);
     }
   }
+  // ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
+  /** 선택 텍스트를 입력창에 넣고 즉시 전송 */
+  receiveSelectionAsQuestion(text) {
+    this.inputEl.value = text;
+    this.handleSend();
+  }
+  /** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
+  receiveSelectionAsContext(text, label) {
+    const ref = {
+      id: text.slice(0, 2e3),
+      // id에 텍스트 자체 저장 (selection 타입)
+      label: `\u2702\uFE0F ${label} (${text.length}\uC790)`,
+      kind: "selection"
+    };
+    if (!this.session.pinnedContext.some((p) => p.id === ref.id)) {
+      this.session.pinnedContext.push(ref);
+      this.renderPins();
+      new import_obsidian8.Notice(`\uC120\uD0DD \uC601\uC5ED\uC744 \uCEE8\uD14D\uC2A4\uD2B8\uC5D0 \uD540\uD588\uC2B5\uB2C8\uB2E4.`);
+    }
+  }
+  /** 마지막 assistant 메시지 텍스트 반환 */
+  getLastAssistantText() {
+    for (let i = this.session.messages.length - 1; i >= 0; i--) {
+      const m = this.session.messages[i];
+      if (m.role === "assistant" && !m.pending && m.text)
+        return m.text;
+    }
+    return null;
+  }
+  /** 대화 초기화 */
+  clearChat() {
+    this.session.clear();
+    this.renderMessages();
+  }
   async handleSend() {
     var _a, _b, _c;
+    const raw = this.inputEl.value.trim();
+    if (!raw)
+      return;
+    if (raw.startsWith("/")) {
+      if (this.handleSlashCommand(raw)) {
+        this.inputEl.value = "";
+        return;
+      }
+    }
     if (!this.plugin.gemini) {
       new import_obsidian8.Notice("Gemini API \uD0A4\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       return;
     }
-    const text = this.inputEl.value.trim();
-    if (!text)
-      return;
+    const text = raw;
     const ytUrls = this.findYoutubeUrls(text);
     for (const url of ytUrls) {
       if (!this.pendingPrefetched.some((p) => p.label.includes(url))) {
@@ -2268,10 +2400,25 @@ ${guardrails}` : DEFAULT_CHAT_SYSTEM_PROMPT;
 .bi-chat-edit-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--background-modifier-border); }
 .bi-chat-apply-btn { font-size: 11px; padding: 4px 8px; cursor: pointer; text-align: left; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 4px; }
 .bi-chat-apply-btn:hover { background: var(--interactive-accent-hover); }
+.bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
+.bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
+.bi-slash-item:hover { background: var(--background-modifier-hover); }
+.bi-slash-cmd { font-weight: 600; color: var(--text-accent); }
+.bi-slash-desc { color: var(--text-muted); }
 `;
     document.head.appendChild(style);
   }
 };
+// ── 슬래시 커맨드 ──
+_ChatView.SLASH_COMMANDS = [
+  { cmd: "/clear", desc: "\uB300\uD654 \uCD08\uAE30\uD654" },
+  { cmd: "/model flash", desc: "Gemini 2.5 Flash\uB85C \uC804\uD658" },
+  { cmd: "/model pro", desc: "Gemini 2.5 Pro\uB85C \uC804\uD658" },
+  { cmd: "/model lite", desc: "Gemini 2.5 Flash-Lite\uB85C \uC804\uD658" },
+  { cmd: "/pin", desc: "\uD604\uC7AC \uB178\uD2B8 \uD540 \uD1A0\uAE00" },
+  { cmd: "/topk", desc: "RAG Top K \uBCC0\uACBD (\uC608: /topk 3)" }
+];
+var ChatView = _ChatView;
 
 // src/settings.ts
 var import_obsidian10 = require("obsidian");
@@ -2989,6 +3136,78 @@ var BidIntelligencePlugin = class extends import_obsidian13.Plugin {
       name: "\uCEE8\uD14D\uC2A4\uD2B8 \uBCFC\uD2B8 \uC7AC\uC778\uB371\uC2F1 (RAG)",
       callback: () => this.indexVault()
     });
+    this.addCommand({
+      id: "send-selection-to-chat",
+      name: "\uC120\uD0DD \uC601\uC5ED\uC744 \uCC44\uD305\uC73C\uB85C \uC9C8\uBB38",
+      editorCallback: async (editor) => {
+        const sel = editor.getSelection();
+        if (!sel) {
+          new import_obsidian13.Notice("\uD14D\uC2A4\uD2B8\uB97C \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
+          return;
+        }
+        await this.activateView(VIEW_TYPE_CHAT, "right");
+        const view = this.getChatView();
+        if (view)
+          view.receiveSelectionAsQuestion(sel);
+      }
+    });
+    this.addCommand({
+      id: "pin-selection-as-context",
+      name: "\uC120\uD0DD \uC601\uC5ED\uC744 \uCEE8\uD14D\uC2A4\uD2B8\uB85C \uD540",
+      editorCallback: async (editor, ctx) => {
+        var _a, _b;
+        const sel = editor.getSelection();
+        if (!sel) {
+          new import_obsidian13.Notice("\uD14D\uC2A4\uD2B8\uB97C \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
+          return;
+        }
+        await this.activateView(VIEW_TYPE_CHAT, "right");
+        const view = this.getChatView();
+        if (view)
+          view.receiveSelectionAsContext(sel, (_b = (_a = ctx.file) == null ? void 0 : _a.basename) != null ? _b : "\uC120\uD0DD");
+      }
+    });
+    this.addCommand({
+      id: "insert-last-response",
+      name: "\uB9C8\uC9C0\uB9C9 AI \uC751\uB2F5\uC744 \uCEE4\uC11C \uC704\uCE58\uC5D0 \uC0BD\uC785",
+      editorCallback: (editor) => {
+        const view = this.getChatView();
+        if (!view) {
+          new import_obsidian13.Notice("\uCC44\uD305\uC744 \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+          return;
+        }
+        const text = view.getLastAssistantText();
+        if (!text) {
+          new import_obsidian13.Notice("AI \uC751\uB2F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+          return;
+        }
+        editor.replaceSelection(text);
+        new import_obsidian13.Notice("AI \uC751\uB2F5\uC774 \uC0BD\uC785\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      }
+    });
+    this.addCommand({
+      id: "clear-chat",
+      name: "\uCC44\uD305 \uB300\uD654 \uCD08\uAE30\uD654",
+      callback: () => {
+        const view = this.getChatView();
+        if (view) {
+          view.clearChat();
+          new import_obsidian13.Notice("\uCC44\uD305\uC774 \uCD08\uAE30\uD654\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        } else
+          new import_obsidian13.Notice("\uCC44\uD305\uC744 \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+      }
+    });
+    this.addCommand({
+      id: "switch-model",
+      name: "\uCC44\uD305 \uBAA8\uB378 \uC804\uD658 (Flash \u2194 Pro)",
+      callback: async () => {
+        const current = this.settings.geminiModel;
+        const next = current.includes("pro") ? "gemini-2.5-flash" : "gemini-2.5-pro";
+        this.settings.geminiModel = next;
+        await this.saveSettings();
+        new import_obsidian13.Notice(`\uBAA8\uB378 \uC804\uD658: ${next}`);
+      }
+    });
     this.addRibbonIcon("database", "\uCEE8\uD14D\uC2A4\uD2B8 \uB9E4\uB2C8\uC800", () => {
       this.activateView(VIEW_TYPE_CONTEXT, "left");
     });
@@ -3057,6 +3276,10 @@ var BidIntelligencePlugin = class extends import_obsidian13.Plugin {
     } else {
       this.gemini = null;
     }
+  }
+  getChatView() {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
+    return leaves.length > 0 ? leaves[0].view : null;
   }
   initMcp() {
     var _a;

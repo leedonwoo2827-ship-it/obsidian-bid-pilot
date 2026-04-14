@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf, TFile, Notice } from "obsidian";
+import { Plugin, WorkspaceLeaf, TFile, Notice, Editor, MarkdownView } from "obsidian";
 import {
 	VIEW_TYPE_CONTEXT,
 	VIEW_TYPE_BRIEFING,
@@ -71,6 +71,67 @@ export default class BidIntelligencePlugin extends Plugin {
 			id: "index-vault",
 			name: "컨텍스트 볼트 재인덱싱 (RAG)",
 			callback: () => this.indexVault(),
+		});
+
+		// ── 채팅 연동 커맨드 ──
+
+		this.addCommand({
+			id: "send-selection-to-chat",
+			name: "선택 영역을 채팅으로 질문",
+			editorCallback: async (editor: Editor) => {
+				const sel = editor.getSelection();
+				if (!sel) { new Notice("텍스트를 먼저 선택하세요."); return; }
+				await this.activateView(VIEW_TYPE_CHAT, "right");
+				const view = this.getChatView();
+				if (view) view.receiveSelectionAsQuestion(sel);
+			},
+		});
+
+		this.addCommand({
+			id: "pin-selection-as-context",
+			name: "선택 영역을 컨텍스트로 핀",
+			editorCallback: async (editor: Editor, ctx: MarkdownView) => {
+				const sel = editor.getSelection();
+				if (!sel) { new Notice("텍스트를 먼저 선택하세요."); return; }
+				await this.activateView(VIEW_TYPE_CHAT, "right");
+				const view = this.getChatView();
+				if (view) view.receiveSelectionAsContext(sel, ctx.file?.basename ?? "선택");
+			},
+		});
+
+		this.addCommand({
+			id: "insert-last-response",
+			name: "마지막 AI 응답을 커서 위치에 삽입",
+			editorCallback: (editor: Editor) => {
+				const view = this.getChatView();
+				if (!view) { new Notice("채팅을 먼저 열어주세요."); return; }
+				const text = view.getLastAssistantText();
+				if (!text) { new Notice("AI 응답이 없습니다."); return; }
+				editor.replaceSelection(text);
+				new Notice("AI 응답이 삽입되었습니다.");
+			},
+		});
+
+		this.addCommand({
+			id: "clear-chat",
+			name: "채팅 대화 초기화",
+			callback: () => {
+				const view = this.getChatView();
+				if (view) { view.clearChat(); new Notice("채팅이 초기화되었습니다."); }
+				else new Notice("채팅을 먼저 열어주세요.");
+			},
+		});
+
+		this.addCommand({
+			id: "switch-model",
+			name: "채팅 모델 전환 (Flash ↔ Pro)",
+			callback: async () => {
+				const current = this.settings.geminiModel;
+				const next = current.includes("pro") ? "gemini-2.5-flash" : "gemini-2.5-pro";
+				this.settings.geminiModel = next;
+				await this.saveSettings();
+				new Notice(`모델 전환: ${next}`);
+			},
 		});
 
 		// Ribbon icons
@@ -154,6 +215,11 @@ export default class BidIntelligencePlugin extends Plugin {
 		} else {
 			this.gemini = null;
 		}
+	}
+
+	getChatView(): ChatView | null {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
+		return leaves.length > 0 ? (leaves[0].view as ChatView) : null;
 	}
 
 	private initMcp(): void {

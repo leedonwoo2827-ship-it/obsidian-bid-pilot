@@ -153,6 +153,7 @@ export class ChatView extends ItemView {
 		this.stopBtn.onclick = () => this.abortCtrl?.abort();
 		this.stopBtn.disabled = true;
 
+		this.setupSlashSuggest();
 		this.injectStyle();
 	}
 
@@ -270,6 +271,108 @@ export class ChatView extends ItemView {
 		return { note: "📄", folder: "📁", selection: "✂️", youtube: "▶️", graph: "🕸️" }[kind];
 	}
 
+	// ── 슬래시 커맨드 ──
+
+	private static SLASH_COMMANDS = [
+		{ cmd: "/clear", desc: "대화 초기화" },
+		{ cmd: "/model flash", desc: "Gemini 2.5 Flash로 전환" },
+		{ cmd: "/model pro", desc: "Gemini 2.5 Pro로 전환" },
+		{ cmd: "/model lite", desc: "Gemini 2.5 Flash-Lite로 전환" },
+		{ cmd: "/pin", desc: "현재 노트 핀 토글" },
+		{ cmd: "/topk", desc: "RAG Top K 변경 (예: /topk 3)" },
+	];
+
+	/**
+	 * 슬래시 커맨드 처리. 처리했으면 true, 아니면 false(일반 메시지로 전송).
+	 */
+	private handleSlashCommand(input: string): boolean {
+		const lower = input.toLowerCase().trim();
+
+		if (lower === "/clear") {
+			this.clearChat();
+			new Notice("채팅 초기화 완료");
+			return true;
+		}
+		if (lower === "/model flash") {
+			this.plugin.settings.geminiModel = "gemini-2.5-flash";
+			void this.plugin.saveSettings();
+			new Notice("모델 전환: gemini-2.5-flash");
+			return true;
+		}
+		if (lower === "/model pro") {
+			this.plugin.settings.geminiModel = "gemini-2.5-pro";
+			void this.plugin.saveSettings();
+			new Notice("모델 전환: gemini-2.5-pro");
+			return true;
+		}
+		if (lower === "/model lite") {
+			this.plugin.settings.geminiModel = "gemini-2.5-flash-lite";
+			void this.plugin.saveSettings();
+			new Notice("모델 전환: gemini-2.5-flash-lite");
+			return true;
+		}
+		if (lower === "/pin") {
+			this.pinActiveFile();
+			return true;
+		}
+		if (lower.startsWith("/topk")) {
+			const n = parseInt(lower.replace("/topk", "").trim(), 10);
+			if (Number.isFinite(n) && n > 0) {
+				this.plugin.settings.ragTopK = n;
+				void this.plugin.saveSettings();
+				new Notice(`RAG Top K → ${n}`);
+			} else {
+				new Notice(`현재 Top K: ${this.plugin.settings.ragTopK} (변경: /topk 숫자)`);
+			}
+			return true;
+		}
+		return false; // 알 수 없는 커맨드 → 일반 메시지로 전송
+	}
+
+	private slashSuggestEl: HTMLElement | null = null;
+
+	/**
+	 * 입력창에 "/" 입력 시 자동완성 드롭다운 표시.
+	 */
+	private setupSlashSuggest(): void {
+		this.inputEl.addEventListener("input", () => {
+			const val = this.inputEl.value;
+			if (val.startsWith("/") && val.length <= 15) {
+				this.showSlashSuggest(val.toLowerCase());
+			} else {
+				this.hideSlashSuggest();
+			}
+		});
+	}
+
+	private showSlashSuggest(partial: string): void {
+		if (!this.slashSuggestEl) {
+			this.slashSuggestEl = document.createElement("div");
+			this.slashSuggestEl.addClass("bi-slash-suggest");
+			this.inputEl.parentElement?.insertBefore(this.slashSuggestEl, this.inputEl);
+		}
+		this.slashSuggestEl.empty();
+		const matches = ChatView.SLASH_COMMANDS.filter((c) =>
+			c.cmd.startsWith(partial) || partial === "/"
+		);
+		if (matches.length === 0) { this.hideSlashSuggest(); return; }
+		this.slashSuggestEl.style.display = "block";
+		for (const m of matches) {
+			const row = this.slashSuggestEl.createDiv({ cls: "bi-slash-item" });
+			row.createEl("span", { text: m.cmd, cls: "bi-slash-cmd" });
+			row.createEl("span", { text: ` — ${m.desc}`, cls: "bi-slash-desc" });
+			row.onclick = () => {
+				this.inputEl.value = m.cmd + " ";
+				this.inputEl.focus();
+				this.hideSlashSuggest();
+			};
+		}
+	}
+
+	private hideSlashSuggest(): void {
+		if (this.slashSuggestEl) this.slashSuggestEl.style.display = "none";
+	}
+
 	private findYoutubeUrls(text: string): string[] {
 		const urls: string[] = [];
 		const re = /(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+)/gi;
@@ -338,13 +441,61 @@ export class ChatView extends ItemView {
 		}
 	}
 
+	// ── 외부에서 호출되는 public 메서드 (main.ts 커맨드용) ──
+
+	/** 선택 텍스트를 입력창에 넣고 즉시 전송 */
+	receiveSelectionAsQuestion(text: string): void {
+		this.inputEl.value = text;
+		this.handleSend();
+	}
+
+	/** 선택 텍스트를 selection 타입 컨텍스트로 핀 */
+	receiveSelectionAsContext(text: string, label: string): void {
+		const ref: ContextRef = {
+			id: text.slice(0, 2000), // id에 텍스트 자체 저장 (selection 타입)
+			label: `✂️ ${label} (${text.length}자)`,
+			kind: "selection",
+		};
+		// 중복 방지
+		if (!this.session.pinnedContext.some((p) => p.id === ref.id)) {
+			this.session.pinnedContext.push(ref);
+			this.renderPins();
+			new Notice(`선택 영역을 컨텍스트에 핀했습니다.`);
+		}
+	}
+
+	/** 마지막 assistant 메시지 텍스트 반환 */
+	getLastAssistantText(): string | null {
+		for (let i = this.session.messages.length - 1; i >= 0; i--) {
+			const m = this.session.messages[i];
+			if (m.role === "assistant" && !m.pending && m.text) return m.text;
+		}
+		return null;
+	}
+
+	/** 대화 초기화 */
+	clearChat(): void {
+		this.session.clear();
+		this.renderMessages();
+	}
+
 	private async handleSend(): Promise<void> {
+		const raw = this.inputEl.value.trim();
+		if (!raw) return;
+
+		// ── 슬래시 커맨드 처리 ──
+		if (raw.startsWith("/")) {
+			if (this.handleSlashCommand(raw)) {
+				this.inputEl.value = "";
+				return;
+			}
+		}
+
 		if (!this.plugin.gemini) {
 			new Notice("Gemini API 키가 설정되지 않았습니다.");
 			return;
 		}
-		const text = this.inputEl.value.trim();
-		if (!text) return;
+		const text = raw;
 
 		// 사용자 입력에 YouTube URL이 있으면 자막 자동 fetch
 		const ytUrls = this.findYoutubeUrls(text);
@@ -550,6 +701,11 @@ export class ChatView extends ItemView {
 .bi-chat-edit-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--background-modifier-border); }
 .bi-chat-apply-btn { font-size: 11px; padding: 4px 8px; cursor: pointer; text-align: left; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 4px; }
 .bi-chat-apply-btn:hover { background: var(--interactive-accent-hover); }
+.bi-slash-suggest { display: none; background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 4px; max-height: 150px; overflow-y: auto; }
+.bi-slash-item { padding: 4px 8px; cursor: pointer; border-radius: 3px; font-size: 12px; }
+.bi-slash-item:hover { background: var(--background-modifier-hover); }
+.bi-slash-cmd { font-weight: 600; color: var(--text-accent); }
+.bi-slash-desc { color: var(--text-muted); }
 `;
 		document.head.appendChild(style);
 	}
