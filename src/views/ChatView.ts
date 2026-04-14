@@ -11,6 +11,11 @@ import type BidIntelligencePlugin from "../main";
 import { ChatSession, type ContextRef, type UiMessage } from "../utils/chatSession";
 import { buildContextBlock, buildRagBlock, activeFileRef } from "../utils/contextBuilder";
 import { extractVideoId, fetchYoutubeTranscript } from "../utils/youtube";
+import {
+	fileToAttachment,
+	extractImagesFromClipboard,
+	formatBytes,
+} from "../utils/imageUtils";
 import type { ChatMessage, GeminiToolDeclaration } from "../utils/gemini";
 import type { McpTool } from "../utils/mcpClient";
 import { ApplyEditModal, parseEditProposals } from "./ApplyEditModal";
@@ -92,6 +97,13 @@ export class ChatView extends ItemView {
 		});
 		pinActiveBtn.onclick = () => this.pinActiveFile();
 
+		const imageBtn = actions.createEl("button", {
+			text: "🖼️ 이미지",
+			cls: "bi-chat-btn",
+		});
+		imageBtn.title = "이미지 파일 첨부 (또는 입력창에 Ctrl+V로 붙여넣기)";
+		imageBtn.onclick = () => this.triggerImagePicker();
+
 		const clearBtn = actions.createEl("button", { text: "🗑️", cls: "bi-chat-btn" });
 		clearBtn.title = "대화 초기화";
 		clearBtn.onclick = () => {
@@ -124,6 +136,16 @@ export class ChatView extends ItemView {
 			}
 		});
 
+		// 클립보드 이미지 붙여넣기
+		this.inputEl.addEventListener("paste", async (e: ClipboardEvent) => {
+			const images = extractImagesFromClipboard(e);
+			if (images.length === 0) return; // 텍스트 paste는 기본 동작 유지
+			e.preventDefault();
+			for (const file of images) {
+				await this.attachImageFile(file);
+			}
+		});
+
 		const btnCol = inputRow.createDiv({ cls: "bi-chat-btn-col" });
 		this.sendBtn = btnCol.createEl("button", { text: "전송", cls: "bi-chat-send" });
 		this.sendBtn.onclick = () => this.handleSend();
@@ -142,6 +164,41 @@ export class ChatView extends ItemView {
 		}
 		this.session.togglePin(ref);
 		this.renderPins();
+	}
+
+	/**
+	 * 숨겨진 <input type="file">을 트리거해 이미지 선택 받음.
+	 */
+	private triggerImagePicker(): void {
+		const input = document.createElement("input");
+		input.type = "file";
+		input.accept = "image/*";
+		input.multiple = true;
+		input.onchange = async () => {
+			if (!input.files) return;
+			for (let i = 0; i < input.files.length; i++) {
+				await this.attachImageFile(input.files[i]);
+			}
+		};
+		input.click();
+	}
+
+	/**
+	 * 단일 이미지 파일 → 리사이즈 → base64 → pendingAttachments에 추가.
+	 */
+	private async attachImageFile(file: File): Promise<void> {
+		try {
+			const att = await fileToAttachment(file, { maxDimension: 2048 });
+			this.pendingAttachments.push({
+				mimeType: att.mimeType,
+				base64: att.base64,
+				label: `${att.label} (${formatBytes(att.sizeBytes)})`,
+			});
+			new Notice(`🖼️ 이미지 첨부: ${att.label}`);
+			this.renderAttachQueue();
+		} catch (e: any) {
+			new Notice(`❌ 이미지 처리 실패: ${e.message || e}`);
+		}
 	}
 
 	private async attachYoutube(url: string): Promise<void> {

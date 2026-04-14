@@ -1470,6 +1470,95 @@ function parseCaptionXml(xml) {
   return lines.join("\n");
 }
 
+// src/utils/imageUtils.ts
+var DEFAULT_MAX_DIMENSION = 2048;
+var SUPPORTED_MIME = ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"];
+async function fileToAttachment(file, opts = {}) {
+  var _a, _b;
+  const maxDim = (_a = opts.maxDimension) != null ? _a : DEFAULT_MAX_DIMENSION;
+  const label = (_b = opts.label) != null ? _b : file.name || `image-${Date.now()}`;
+  if (!SUPPORTED_MIME.includes(file.type) && !file.type.startsWith("image/")) {
+    throw new Error(`\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC774\uBBF8\uC9C0 \uD615\uC2DD: ${file.type || "unknown"}`);
+  }
+  if (file.type === "image/heic" || file.type === "image/heif") {
+    const base642 = await blobToBase64(file);
+    return {
+      mimeType: file.type,
+      base64: base642,
+      label,
+      sizeBytes: file.size
+    };
+  }
+  const dataUrl = await blobToDataUrl(file);
+  const img = await loadImage(dataUrl);
+  const { width, height } = fitInside(img.width, img.height, maxDim);
+  if (width === img.width && height === img.height && file.size < 5e5) {
+    const base642 = dataUrl.split(",")[1];
+    return { mimeType: file.type, base64: base642, label, sizeBytes: file.size };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx)
+    throw new Error("canvas 2D context \uC0DD\uC131 \uC2E4\uD328");
+  ctx.drawImage(img, 0, 0, width, height);
+  const outMime = file.type === "image/jpeg" ? "image/jpeg" : "image/png";
+  const quality = outMime === "image/jpeg" ? 0.85 : void 0;
+  const outDataUrl = canvas.toDataURL(outMime, quality);
+  const base64 = outDataUrl.split(",")[1];
+  const sizeBytes = Math.ceil(base64.length * 3 / 4);
+  return { mimeType: outMime, base64, label, sizeBytes };
+}
+function extractImagesFromClipboard(evt) {
+  var _a;
+  const files = [];
+  const items = (_a = evt.clipboardData) == null ? void 0 : _a.items;
+  if (!items)
+    return files;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const f = item.getAsFile();
+      if (f)
+        files.push(f);
+    }
+  }
+  return files;
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+function blobToBase64(blob) {
+  return blobToDataUrl(blob).then((d) => d.split(",")[1]);
+}
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("\uC774\uBBF8\uC9C0 \uB85C\uB4DC \uC2E4\uD328"));
+    img.src = dataUrl;
+  });
+}
+function fitInside(w, h, max) {
+  if (w <= max && h <= max)
+    return { width: w, height: h };
+  const ratio = w > h ? max / w : max / h;
+  return { width: Math.round(w * ratio), height: Math.round(h * ratio) };
+}
+function formatBytes(bytes) {
+  if (bytes < 1024)
+    return `${bytes}B`;
+  if (bytes < 1024 * 1024)
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
 // src/views/ApplyEditModal.ts
 var import_obsidian6 = require("obsidian");
 
@@ -1777,6 +1866,12 @@ var ChatView = class extends import_obsidian8.ItemView {
       cls: "bi-chat-btn"
     });
     pinActiveBtn.onclick = () => this.pinActiveFile();
+    const imageBtn = actions.createEl("button", {
+      text: "\u{1F5BC}\uFE0F \uC774\uBBF8\uC9C0",
+      cls: "bi-chat-btn"
+    });
+    imageBtn.title = "\uC774\uBBF8\uC9C0 \uD30C\uC77C \uCCA8\uBD80 (\uB610\uB294 \uC785\uB825\uCC3D\uC5D0 Ctrl+V\uB85C \uBD99\uC5EC\uB123\uAE30)";
+    imageBtn.onclick = () => this.triggerImagePicker();
     const clearBtn = actions.createEl("button", { text: "\u{1F5D1}\uFE0F", cls: "bi-chat-btn" });
     clearBtn.title = "\uB300\uD654 \uCD08\uAE30\uD654";
     clearBtn.onclick = () => {
@@ -1800,6 +1895,15 @@ var ChatView = class extends import_obsidian8.ItemView {
         this.handleSend();
       }
     });
+    this.inputEl.addEventListener("paste", async (e) => {
+      const images = extractImagesFromClipboard(e);
+      if (images.length === 0)
+        return;
+      e.preventDefault();
+      for (const file of images) {
+        await this.attachImageFile(file);
+      }
+    });
     const btnCol = inputRow.createDiv({ cls: "bi-chat-btn-col" });
     this.sendBtn = btnCol.createEl("button", { text: "\uC804\uC1A1", cls: "bi-chat-send" });
     this.sendBtn.onclick = () => this.handleSend();
@@ -1819,6 +1923,40 @@ var ChatView = class extends import_obsidian8.ItemView {
     }
     this.session.togglePin(ref);
     this.renderPins();
+  }
+  /**
+   * 숨겨진 <input type="file">을 트리거해 이미지 선택 받음.
+   */
+  triggerImagePicker() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.multiple = true;
+    input.onchange = async () => {
+      if (!input.files)
+        return;
+      for (let i = 0; i < input.files.length; i++) {
+        await this.attachImageFile(input.files[i]);
+      }
+    };
+    input.click();
+  }
+  /**
+   * 단일 이미지 파일 → 리사이즈 → base64 → pendingAttachments에 추가.
+   */
+  async attachImageFile(file) {
+    try {
+      const att = await fileToAttachment(file, { maxDimension: 2048 });
+      this.pendingAttachments.push({
+        mimeType: att.mimeType,
+        base64: att.base64,
+        label: `${att.label} (${formatBytes(att.sizeBytes)})`
+      });
+      new import_obsidian8.Notice(`\u{1F5BC}\uFE0F \uC774\uBBF8\uC9C0 \uCCA8\uBD80: ${att.label}`);
+      this.renderAttachQueue();
+    } catch (e) {
+      new import_obsidian8.Notice(`\u274C \uC774\uBBF8\uC9C0 \uCC98\uB9AC \uC2E4\uD328: ${e.message || e}`);
+    }
   }
   async attachYoutube(url) {
     new import_obsidian8.Notice("YouTube \uC790\uB9C9\uC744 \uAC00\uC838\uC624\uB294 \uC911...");
