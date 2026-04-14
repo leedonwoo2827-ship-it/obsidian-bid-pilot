@@ -31,16 +31,10 @@ const DEFAULT_CHAT_SYSTEM_PROMPT = `당신은 한국의 공공조달/ODA 수주 
 - 답변은 간결하고 실행 가능한 형태로 정리합니다.
 
 노트 편집 제안 규칙:
-사용자가 "이 섹션을 다시 써줘", "이 문단을 간결하게" 등 노트 편집을 요청하면
-제안 내용을 반드시 다음 형식으로 감쌉니다:
-
-<<<EDIT target="경로/파일명.md" mode="section" section="## 섹션제목">>>
-(교체할 새 내용 전체)
-<<<END_EDIT>>>
-
-mode 값: replace(전체 교체) / append(끝에 추가) / section(섹션 교체).
-target을 생략하면 활성 파일에 적용됩니다.
-이 태그 밖에도 설명을 자유롭게 쓸 수 있으나, 실제 적용 대상은 반드시 태그 안에만 넣습니다.`;
+사용자가 "다시 써줘", "수정해줘", "바꿔줘", "변경해줘" 등 편집을 요청하면:
+1. 수정된 내용을 마크다운 코드블록(\`\`\`markdown ... \`\`\`)으로 감싸서 제시합니다.
+2. 가능하면 <<<EDIT target="파일.md" mode="section" section="## 헤딩">>> ... <<<END_EDIT>>> 태그도 사용합니다.
+3. 설명은 코드블록 바깥에 씁니다. 코드블록 안에는 적용할 내용만 넣습니다.`;
 
 export class ChatView extends ItemView {
 	private plugin: BidIntelligencePlugin;

@@ -1545,11 +1545,17 @@ function formatBytes(bytes) {
 // src/views/ApplyEditModal.ts
 var import_obsidian6 = require("obsidian");
 function parseEditProposals(responseText) {
+  const tagged = parseEditTags(responseText);
+  if (tagged.length > 0)
+    return tagged;
+  return parseMarkdownCodeBlocks(responseText);
+}
+function parseEditTags(text) {
   var _a, _b;
   const result = [];
   const re = /<<<EDIT([^>]*)>>>([\s\S]*?)<<<END_EDIT>>>/g;
   let m;
-  while (m = re.exec(responseText)) {
+  while (m = re.exec(text)) {
     const attrs = m[1];
     const body = m[2].trim();
     const targetMatch = attrs.match(/target="([^"]+)"/);
@@ -1560,6 +1566,26 @@ function parseEditProposals(responseText) {
       proposedContent: body,
       mode: (_b = modeMatch == null ? void 0 : modeMatch[1]) != null ? _b : "replace",
       sectionHeading: sectionMatch == null ? void 0 : sectionMatch[1]
+    });
+  }
+  return result;
+}
+function parseMarkdownCodeBlocks(text) {
+  const result = [];
+  const re = /```(?:markdown|md)?\s*\n([\s\S]*?)```/g;
+  let m;
+  while (m = re.exec(text)) {
+    const body = m[1].trim();
+    if (body.split("\n").length < 2)
+      continue;
+    const firstLine = body.split("\n")[0].trim();
+    const looksLikeMarkdown = /^[#\-\*>|]/.test(firstLine) || firstLine.includes("**") || body.includes("\n- ");
+    if (!looksLikeMarkdown)
+      continue;
+    result.push({
+      targetPath: "",
+      proposedContent: body,
+      mode: "section"
     });
   }
   return result;
@@ -1599,16 +1625,10 @@ var DEFAULT_CHAT_SYSTEM_PROMPT = `\uB2F9\uC2E0\uC740 \uD55C\uAD6D\uC758 \uACF5\u
 - \uB2F5\uBCC0\uC740 \uAC04\uACB0\uD558\uACE0 \uC2E4\uD589 \uAC00\uB2A5\uD55C \uD615\uD0DC\uB85C \uC815\uB9AC\uD569\uB2C8\uB2E4.
 
 \uB178\uD2B8 \uD3B8\uC9D1 \uC81C\uC548 \uADDC\uCE59:
-\uC0AC\uC6A9\uC790\uAC00 "\uC774 \uC139\uC158\uC744 \uB2E4\uC2DC \uC368\uC918", "\uC774 \uBB38\uB2E8\uC744 \uAC04\uACB0\uD558\uAC8C" \uB4F1 \uB178\uD2B8 \uD3B8\uC9D1\uC744 \uC694\uCCAD\uD558\uBA74
-\uC81C\uC548 \uB0B4\uC6A9\uC744 \uBC18\uB4DC\uC2DC \uB2E4\uC74C \uD615\uC2DD\uC73C\uB85C \uAC10\uC309\uB2C8\uB2E4:
-
-<<<EDIT target="\uACBD\uB85C/\uD30C\uC77C\uBA85.md" mode="section" section="## \uC139\uC158\uC81C\uBAA9">>>
-(\uAD50\uCCB4\uD560 \uC0C8 \uB0B4\uC6A9 \uC804\uCCB4)
-<<<END_EDIT>>>
-
-mode \uAC12: replace(\uC804\uCCB4 \uAD50\uCCB4) / append(\uB05D\uC5D0 \uCD94\uAC00) / section(\uC139\uC158 \uAD50\uCCB4).
-target\uC744 \uC0DD\uB7B5\uD558\uBA74 \uD65C\uC131 \uD30C\uC77C\uC5D0 \uC801\uC6A9\uB429\uB2C8\uB2E4.
-\uC774 \uD0DC\uADF8 \uBC16\uC5D0\uB3C4 \uC124\uBA85\uC744 \uC790\uC720\uB86D\uAC8C \uC4F8 \uC218 \uC788\uC73C\uB098, \uC2E4\uC81C \uC801\uC6A9 \uB300\uC0C1\uC740 \uBC18\uB4DC\uC2DC \uD0DC\uADF8 \uC548\uC5D0\uB9CC \uB123\uC2B5\uB2C8\uB2E4.`;
+\uC0AC\uC6A9\uC790\uAC00 "\uB2E4\uC2DC \uC368\uC918", "\uC218\uC815\uD574\uC918", "\uBC14\uAFD4\uC918", "\uBCC0\uACBD\uD574\uC918" \uB4F1 \uD3B8\uC9D1\uC744 \uC694\uCCAD\uD558\uBA74:
+1. \uC218\uC815\uB41C \uB0B4\uC6A9\uC744 \uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D(\`\`\`markdown ... \`\`\`)\uC73C\uB85C \uAC10\uC2F8\uC11C \uC81C\uC2DC\uD569\uB2C8\uB2E4.
+2. \uAC00\uB2A5\uD558\uBA74 <<<EDIT target="\uD30C\uC77C.md" mode="section" section="## \uD5E4\uB529">>> ... <<<END_EDIT>>> \uD0DC\uADF8\uB3C4 \uC0AC\uC6A9\uD569\uB2C8\uB2E4.
+3. \uC124\uBA85\uC740 \uCF54\uB4DC\uBE14\uB85D \uBC14\uAE65\uC5D0 \uC501\uB2C8\uB2E4. \uCF54\uB4DC\uBE14\uB85D \uC548\uC5D0\uB294 \uC801\uC6A9\uD560 \uB0B4\uC6A9\uB9CC \uB123\uC2B5\uB2C8\uB2E4.`;
 var _ChatView = class _ChatView extends import_obsidian8.ItemView {
   constructor(leaf, plugin) {
     super(leaf);

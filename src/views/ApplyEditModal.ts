@@ -146,11 +146,27 @@ export class ApplyEditModal extends Modal {
  * 어시스턴트 응답 본문에서 `<<<EDIT target="..." mode="...">>>…<<<END_EDIT>>>`
  * 블록을 추출. 없으면 빈 배열.
  */
+/**
+ * 어시스턴트 응답에서 편집 제안을 추출.
+ *
+ * 1순위: `<<<EDIT …>>>…<<<END_EDIT>>>` 태그 (정확한 제어)
+ * 2순위 (fallback): 마크다운 코드블록 (```markdown 또는 ```)을 감지해 적용 제안으로 전환.
+ *   — Flash-Lite 등 태그를 무시하는 모델에서도 "다시 써줘" 류 응답을 적용 가능.
+ */
 export function parseEditProposals(responseText: string): EditProposal[] {
+	// 1순위: EDIT 태그
+	const tagged = parseEditTags(responseText);
+	if (tagged.length > 0) return tagged;
+
+	// 2순위: 마크다운 코드블록 fallback
+	return parseMarkdownCodeBlocks(responseText);
+}
+
+function parseEditTags(text: string): EditProposal[] {
 	const result: EditProposal[] = [];
 	const re = /<<<EDIT([^>]*)>>>([\s\S]*?)<<<END_EDIT>>>/g;
 	let m: RegExpExecArray | null;
-	while ((m = re.exec(responseText))) {
+	while ((m = re.exec(text))) {
 		const attrs = m[1];
 		const body = m[2].trim();
 		const targetMatch = attrs.match(/target="([^"]+)"/);
@@ -161,6 +177,29 @@ export function parseEditProposals(responseText: string): EditProposal[] {
 			proposedContent: body,
 			mode: (modeMatch?.[1] as EditProposal["mode"]) ?? "replace",
 			sectionHeading: sectionMatch?.[1],
+		});
+	}
+	return result;
+}
+
+function parseMarkdownCodeBlocks(text: string): EditProposal[] {
+	const result: EditProposal[] = [];
+	// ```markdown ... ``` 또는 ``` ... ``` (최소 3줄 이상인 블록만)
+	const re = /```(?:markdown|md)?\s*\n([\s\S]*?)```/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(text))) {
+		const body = m[1].trim();
+		// 너무 짧은 블록(1줄 미만)은 코드 예시일 수 있으므로 스킵
+		if (body.split("\n").length < 2) continue;
+		// 코드(json, js, python 등) 블록 배제 — 헤딩(#)이나 불릿(-)으로 시작하면 마크다운
+		const firstLine = body.split("\n")[0].trim();
+		const looksLikeMarkdown = /^[#\-\*>|]/.test(firstLine) || firstLine.includes("**") || body.includes("\n- ");
+		if (!looksLikeMarkdown) continue;
+
+		result.push({
+			targetPath: "",
+			proposedContent: body,
+			mode: "section",
 		});
 	}
 	return result;
