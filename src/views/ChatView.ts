@@ -488,8 +488,8 @@ export class ChatView extends ItemView {
 	}
 
 	private async quickApply(text: string, mode: "section" | "append"): Promise<void> {
-		const file = this.app.workspace.getActiveFile();
-		if (!file) { new Notice("활성 파일이 없습니다."); return; }
+		const file = this.resolveTargetFile("");
+		if (!file) { new Notice("노트를 먼저 열어주세요."); return; }
 
 		try {
 			const oldContent = await this.app.vault.read(file);
@@ -554,11 +554,9 @@ export class ChatView extends ItemView {
 		const applyBtn = btnRow.createEl("button", { text: "✅ 적용", cls: "bi-inline-diff-apply" });
 		applyBtn.onclick = async () => {
 			try {
-				const file = proposal.targetPath
-					? this.app.vault.getAbstractFileByPath(proposal.targetPath)
-					: this.app.workspace.getActiveFile();
-				if (!file || !(file instanceof TFile)) {
-					new Notice("❌ 대상 파일을 찾지 못했습니다.");
+				const file = this.resolveTargetFile(proposal.targetPath);
+				if (!file) {
+					new Notice("❌ 대상 파일을 찾지 못했습니다. 노트를 먼저 열어주세요.");
 					return;
 				}
 				const oldContent = await this.app.vault.read(file);
@@ -577,6 +575,28 @@ export class ChatView extends ItemView {
 			card.empty();
 			card.createEl("div", { text: "⏭️ 패스됨", cls: "bi-inline-diff-skipped" });
 		};
+	}
+
+	/**
+	 * 대상 파일 해석. 채팅 패널이 포커스를 가져 getActiveFile()이 null인 경우
+	 * 마크다운 leaf를 직접 탐색.
+	 */
+	private resolveTargetFile(targetPath: string): TFile | null {
+		// 1) 명시적 경로가 있으면
+		if (targetPath) {
+			const f = this.app.vault.getAbstractFileByPath(targetPath);
+			return f instanceof TFile ? f : null;
+		}
+		// 2) getActiveFile (에디터가 포커스일 때)
+		const active = this.app.workspace.getActiveFile();
+		if (active) return active;
+		// 3) fallback: 마크다운 뷰 leaf 중 가장 최근 활성화된 것
+		const leaves = this.app.workspace.getLeavesOfType("markdown");
+		for (const leaf of leaves) {
+			const file = (leaf.view as any)?.file;
+			if (file instanceof TFile) return file;
+		}
+		return null;
 	}
 
 	private computeNewContent(oldContent: string, proposal: EditProposal): string {

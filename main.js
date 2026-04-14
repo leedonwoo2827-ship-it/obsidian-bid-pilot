@@ -2023,9 +2023,9 @@ ${t.text}`
     };
   }
   async quickApply(text, mode) {
-    const file = this.app.workspace.getActiveFile();
+    const file = this.resolveTargetFile("");
     if (!file) {
-      new import_obsidian8.Notice("\uD65C\uC131 \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian8.Notice("\uB178\uD2B8\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
       return;
     }
     try {
@@ -2081,9 +2081,9 @@ ${t.text}`
     const applyBtn = btnRow.createEl("button", { text: "\u2705 \uC801\uC6A9", cls: "bi-inline-diff-apply" });
     applyBtn.onclick = async () => {
       try {
-        const file = proposal.targetPath ? this.app.vault.getAbstractFileByPath(proposal.targetPath) : this.app.workspace.getActiveFile();
-        if (!file || !(file instanceof import_obsidian8.TFile)) {
-          new import_obsidian8.Notice("\u274C \uB300\uC0C1 \uD30C\uC77C\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+        const file = this.resolveTargetFile(proposal.targetPath);
+        if (!file) {
+          new import_obsidian8.Notice("\u274C \uB300\uC0C1 \uD30C\uC77C\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB178\uD2B8\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
           return;
         }
         const oldContent = await this.app.vault.read(file);
@@ -2101,6 +2101,27 @@ ${t.text}`
       card.empty();
       card.createEl("div", { text: "\u23ED\uFE0F \uD328\uC2A4\uB428", cls: "bi-inline-diff-skipped" });
     };
+  }
+  /**
+   * 대상 파일 해석. 채팅 패널이 포커스를 가져 getActiveFile()이 null인 경우
+   * 마크다운 leaf를 직접 탐색.
+   */
+  resolveTargetFile(targetPath) {
+    var _a;
+    if (targetPath) {
+      const f = this.app.vault.getAbstractFileByPath(targetPath);
+      return f instanceof import_obsidian8.TFile ? f : null;
+    }
+    const active = this.app.workspace.getActiveFile();
+    if (active)
+      return active;
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      const file = (_a = leaf.view) == null ? void 0 : _a.file;
+      if (file instanceof import_obsidian8.TFile)
+        return file;
+    }
+    return null;
   }
   computeNewContent(oldContent, proposal) {
     var _a, _b;
